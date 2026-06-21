@@ -1,6 +1,36 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  synapse-push library manifest. POST_NOTIFICATIONS permission + FCM service
-  declarations land in PR 4 (Phase 8.4b.7).
+  synapse-push library manifest. Declares the SDK's FirebaseMessagingService
+  subclass so apps that depend on synapse-push automatically register it
+  via manifest merger.
+
+  POST_NOTIFICATIONS permission is INTENTIONALLY not declared here. Android
+  13+ requires the host app to declare it (so the user can grant or deny
+  per-app) — declaring it in a library would let library consumers
+  inadvertently inherit the permission, and Play Store metadata would list
+  the SDK as the source of the permission. Host apps should add to their
+  own manifest:
+
+      <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
+  …and request it at runtime with `ActivityResultContracts.RequestPermission`
+  when targetSdk >= 33. The SDK does not own the permission UX — same
+  contract as iOS where the host app calls `requestPushPermission`.
+
+  The PyrxMessagingService is exported=false (the default) and only the
+  Firebase library invokes it via implicit-intent dispatch. Host apps that
+  want to subclass PyrxMessagingService can do so and re-declare the service
+  with their own subclass — manifest merger's `tools:replace="android:name"`
+  override is the documented Firebase pattern.
 -->
-<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <application>
+        <service
+            android:name="tech.pyrx.synapse.push.PyrxMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+    </application>
+</manifest>
