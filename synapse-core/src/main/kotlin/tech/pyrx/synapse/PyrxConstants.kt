@@ -20,7 +20,7 @@ public object PyrxConstants {
      * Bumped together with each module's Gradle `version` declaration. The
      * release tag (`vX.Y.Z`) in CI must equal this value.
      */
-    public const val SDK_VERSION: String = "0.1.0"
+    public const val SDK_VERSION: String = "0.1.1"
 
     /**
      * Platform identifier. Sent on `X-PYRX-SDK-PLATFORM` (header wired in PR 2).
