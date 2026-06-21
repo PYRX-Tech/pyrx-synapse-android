@@ -52,14 +52,18 @@ Maven Central requires every artifact to be GPG-signed.
 
 ### GitHub repository secrets
 
-Add four secrets to `PYRX-Tech/pyrx-synapse-android` repository settings (**Settings → Secrets and variables → Actions → New repository secret**):
+Four secrets are required. **Recommended path:** promote them to **PYRX-Tech org-level secrets** (**GitHub Org settings → Secrets and variables → Actions → New organization secret**, scope to `pyrx-synapse-{ios,android,java,...}`). This avoids per-repo duplication when future SDK repos (Web Push, React Native, Flutter — Phase 9) need the same credentials.
+
+**Alternative:** add as `PYRX-Tech/pyrx-synapse-android` repository secrets (**Settings → Secrets and variables → Actions → New repository secret**). This duplicates per-repo but works the same way.
+
+The secret names match `PYRX-Tech/pyrx-synapse-java` (live since 2026-05-02) so any one of org-secrets / java-repo-copy / android-repo-copy will be picked up by the workflow:
 
 | Secret | Value |
 |---|---|
-| `SONATYPE_USERNAME` | Your Sonatype OSSRH / Central Portal username. |
-| `SONATYPE_PASSWORD` | The corresponding password (or token, if using Central Portal). |
-| `MAVEN_SIGNING_KEY` | The full contents of `maven-signing-key.asc` (the ASCII-armored private key). |
-| `MAVEN_SIGNING_PASSWORD` | The passphrase you chose when generating the GPG key. |
+| `CENTRAL_USERNAME` | Your Sonatype Central Portal user token name (Account → "Generate User Token"). |
+| `CENTRAL_PASSWORD` | The corresponding user token password (same screen). |
+| `GPG_PRIVATE_KEY` | The full contents of the ASCII-armored private key (`gpg --armor --export-secret-keys <KEY_ID>`). |
+| `GPG_PASSPHRASE` | The passphrase you chose when generating the GPG key. |
 
 Also create a repository **variable** named `MAVEN_PUBLISH_ENABLED` with value `true` (the publish job is gated on this flag so accidentally-pushed tags don't publish before secrets are wired).
 

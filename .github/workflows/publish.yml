@@ -48,10 +48,12 @@ jobs:
     if: >-
       ${{ vars.MAVEN_PUBLISH_ENABLED == 'true' }}
     env:
-      ORG_GRADLE_PROJECT_sonatypeUsername: ${{ secrets.SONATYPE_USERNAME }}
-      ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.SONATYPE_PASSWORD }}
-      ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
-      ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+      # Secret names aligned with PYRX-Tech/pyrx-synapse-java (live since 2026-05-02)
+      # so the same 4 GH secrets / org-secrets serve every JVM SDK repo.
+      ORG_GRADLE_PROJECT_sonatypeUsername: ${{ secrets.CENTRAL_USERNAME }}
+      ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.CENTRAL_PASSWORD }}
+      ORG_GRADLE_PROJECT_signingKey: ${{ secrets.GPG_PRIVATE_KEY }}
+      ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.GPG_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
 
