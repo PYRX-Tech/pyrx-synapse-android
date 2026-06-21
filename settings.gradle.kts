@@ -26,3 +26,8 @@ rootProject.name = "pyrx-synapse-android"
 include(":synapse-core")
 include(":synapse-push")
 include(":synapse-inapp")
+
+// Sample app (Phase 8.4b Task 8.4b.13) — Jetpack Compose demo that
+// exercises every public SDK surface. NOT published to Maven; build target
+// only. See `sample-app/README.md` for setup + how-to-run instructions.
+include(":sample-app")

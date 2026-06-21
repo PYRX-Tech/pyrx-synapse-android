@@ -1,0 +1,29 @@
+{
+  "_comment": "PLACEHOLDER ONLY — see sample-app/README.md for setup instructions.",
+  "_instructions": [
+    "This file is a placeholder so the sample-app directory is self-documenting.",
+    "It is NOT consumed by the build. The synapse-push module pulls Firebase",
+    "Messaging via the Firebase BoM; FCM token delivery requires a REAL",
+    "google-services.json placed at sample-app/google-services.json.",
+    "",
+    "To enable push end-to-end:",
+    "  1. Create or open a Firebase project at https://console.firebase.google.com",
+    "  2. Add an Android app with package name `tech.pyrx.synapse.sample`",
+    "  3. Download the real google-services.json from the Firebase console",
+    "  4. Place it at sample-app/google-services.json (NOT this .placeholder file)",
+    "  5. Apply the google-services Gradle plugin in sample-app/build.gradle.kts:",
+    "       plugins {",
+    "           id(\"com.google.gms.google-services\")",
+    "       }",
+    "     and add the classpath at the root level if not already present:",
+    "       classpath(\"com.google.gms:google-services:4.4.1\")",
+    "",
+    "  6. Rebuild the app. PyrxMessagingService will now receive FCM tokens",
+    "     and Pyrx.handleDeviceToken() will register them with /v1/devices.",
+    "",
+    "Without these steps the Push demo screen still loads — the FCM token",
+    "fetch button will surface an error from the Firebase SDK, and",
+    "PyrxMessagingService will never deliver onNewToken. All other demo",
+    "screens (Identity, Events, Debug, Privacy) work without google-services.json."
+  ]
+}
