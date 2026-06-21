@@ -17,6 +17,16 @@ plugins {
     alias(libs.plugins.nmcp)
 }
 
+// Root-level group + version drive NMCP's deployment-bundle filename in the
+// Central Portal UI (e.g. `pyrx-synapse-android-0.1.2.zip` instead of
+// `pyrx-synapse-android-unspecified.zip`). Cosmetic only — the actual
+// per-module artifact coordinates (groupId/artifactId/version) live in each
+// module's build.gradle.kts and are unaffected by these root values. Keep
+// version in lockstep with the per-module versions until a buildSrc release
+// script automates the sync.
+group = "tech.pyrx.synapse"
+version = "0.1.2"
+
 // Aggregate every SDK module publication into one Central Portal upload.
 // Applied at the root project; nmcp's aggregation API walks subprojects
 // looking for "release" MavenPublications. synapse-inapp is intentionally
