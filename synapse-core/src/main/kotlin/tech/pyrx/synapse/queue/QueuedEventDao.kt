@@ -54,6 +54,14 @@ internal interface QueuedEventDao {
     @Query("DELETE FROM queued_events WHERE id IN (:ids)")
     suspend fun deleteByIds(ids: List<String>)
 
+    /**
+     * Truncate the table — used by [EventQueue.wipe] for the GDPR delete
+     * cascade. One round-trip regardless of row count. Idempotent on an
+     * already-empty table.
+     */
+    @Query("DELETE FROM queued_events")
+    suspend fun deleteAll()
+
     /** Total event count on disk. */
     @Query("SELECT COUNT(*) FROM queued_events")
     suspend fun count(): Int

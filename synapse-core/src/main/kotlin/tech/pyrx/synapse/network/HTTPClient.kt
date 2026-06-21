@@ -146,6 +146,48 @@ public class HTTPClient(
         validate(response)
     }
 
+    /**
+     * POST an arbitrary [path] (dynamic — built from a path parameter at
+     * call time, not one of the fixed [Endpoint] enum values) with an empty
+     * body and discard the response.
+     *
+     * Used by `PrivacyManager.deleteUser` to call
+     * `/v1/contacts/{external_id}/delete` — the external_id is in the path
+     * itself, not the body. Mirrors iOS `HTTPClient.postPath(_:body:)`.
+     *
+     * The five required headers are still injected; only the URL changes.
+     *
+     * Path must start with `/` and is appended to [PyrxConfig.baseUrl]
+     * verbatim. Callers are responsible for URL-encoding path segments
+     * (see `PrivacyManager.contactsDeletePath`).
+     *
+     * @throws PyrxError.Network on transport / HTTP failure.
+     */
+    public suspend fun postPath(path: String) {
+        val request = buildEmptyPostRequest(path)
+        val response = perform(request)
+        validate(response)
+    }
+
+    /**
+     * Build a POST request to a dynamic [path] with an empty body. Shared
+     * with [postPath]. Internal so future tests can assert header injection
+     * without going through [perform].
+     */
+    internal fun buildEmptyPostRequest(path: String): Request {
+        val url = "${config.baseUrl.trimEnd('/')}$path"
+        val requestBody = ByteArray(0).toRequestBody(JSON_MEDIA_TYPE)
+        return Request.Builder()
+            .url(url)
+            .post(requestBody)
+            .header(HeaderName.WORKSPACE_ID, config.workspaceId.toString())
+            .header(HeaderName.API_KEY, config.apiKey)
+            .header(HeaderName.SDK_VERSION, PyrxConstants.SDK_VERSION)
+            .header(HeaderName.SDK_PLATFORM, PyrxConstants.PLATFORM)
+            .header(HeaderName.CONTENT_TYPE, JSON_CONTENT_TYPE)
+            .build()
+    }
+
     // MARK: - Request construction
 
     /**

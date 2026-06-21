@@ -48,6 +48,7 @@ import tech.pyrx.synapse.network.HTTPSession
 import tech.pyrx.synapse.network.JSONValue
 import tech.pyrx.synapse.network.OkHttpSession
 import tech.pyrx.synapse.network.WireEnvironment
+import tech.pyrx.synapse.privacy.PrivacyManager
 import tech.pyrx.synapse.queue.EventQueue
 import tech.pyrx.synapse.queue.EventQueueDatabase
 import tech.pyrx.synapse.queue.NetworkCallbackReachability
@@ -87,6 +88,31 @@ public object Pyrx {
 
     @Volatile
     private var reachability: Reachability? = null
+
+    /**
+     * Privacy controls — `setTrackingEnabled` kill switch + `deleteUser`
+     * GDPR cascade + `POST_NOTIFICATIONS` permission awareness. (PR 5)
+     */
+    @Volatile
+    private var privacyManager: PrivacyManager? = null
+
+    /**
+     * Pending [setTrackingEnabled] value — captured before [initialize] runs
+     * so apps that need a sticky opt-out can flip the switch at process
+     * start without timing the call after init. Applied during
+     * [initialize] as soon as [privacyManager] is constructed.
+     */
+    @Volatile
+    private var pendingTrackingEnabled: Boolean? = null
+
+    /**
+     * Pending cold-start push payload — captured before [initialize] runs so
+     * a launcher Activity that calls [recordColdStartLaunch] before the SDK
+     * is initialised doesn't lose the attribution. Replayed during
+     * [initialize] as soon as [pushBridge] / [eventsManager] are wired.
+     */
+    @Volatile
+    private var pendingColdStartIntent: Intent? = null
 
     /**
      * Optional push bridge installed by the synapse-push module. Apps that
@@ -150,6 +176,22 @@ public object Pyrx {
     }
 
     /**
+     * Bundle of dependency overrides for the test seam version of
+     * [initialize]. Production callers never construct one — they go through
+     * the two-arg overload which uses real (Encrypted, OkHttp, Room,
+     * NetworkCallback) implementations.
+     *
+     * Bundled into one parameter so detekt's `LongParameterList` rule (max
+     * 7) stays happy as the SDK grows more seams.
+     */
+    internal data class TestOverrides(
+        val storage: PyrxStorage? = null,
+        val session: HTTPSession? = null,
+        val dao: QueuedEventDao? = null,
+        val reachability: Reachability? = null,
+    )
+
+    /**
      * Test seam. Production callers always use the two-argument overload.
      * Allows the unit tests to inject:
      *   - an [tech.pyrx.synapse.storage.InMemoryStorage] (skip Keystore)
@@ -165,80 +207,150 @@ public object Pyrx {
         sessionOverride: HTTPSession?,
         daoOverride: QueuedEventDao?,
         reachabilityOverride: Reachability?,
+    ) = initialize(
+        context = context,
+        config = config,
+        overrides =
+            TestOverrides(
+                storage = storageOverride,
+                session = sessionOverride,
+                dao = daoOverride,
+                reachability = reachabilityOverride,
+            ),
+    )
+
+    /**
+     * Bundled-override variant of [initialize]. Internal — production callers
+     * use the two-arg overload above.
+     */
+    @Throws(PyrxError::class)
+    internal suspend fun initialize(
+        context: Context,
+        config: PyrxConfig,
+        overrides: TestOverrides,
     ) {
         initMutex.withLock {
-            val existing = this.config
-            if (existing != null) {
-                if (existing == config) {
-                    logger.info { "initialize(...) called twice with identical config — no-op." }
-                    return
-                }
-                throw PyrxError.AlreadyInitialized
-            }
+            if (isAlreadyInitialized(config)) return
 
             config.validate()
             logger.setLevel(config.logLevel)
 
-            val store = storageOverride ?: EncryptedStore(context.applicationContext)
+            val store = overrides.storage ?: EncryptedStore(context.applicationContext)
             val anon = ensureAnonymousId(store)
-
-            // Build the network + identity layer now (not lazily) so the
-            // first call to identify() pays no construction cost on the
-            // request path.
-            val session = sessionOverride ?: OkHttpSession()
-            val client = HTTPClient(config = config, session = session)
-            val identity =
-                IdentityManager(
-                    storage = store,
-                    httpClient = client,
-                    environment = WireEnvironment.from(config.environment),
-                    logger = logger,
+            val privacy =
+                wireServices(
+                    context = context,
+                    config = config,
+                    store = store,
+                    anon = anon,
+                    overrides = overrides,
                 )
-
-            // PR 3 — events + offline queue. Build the DAO (real Room db or
-            // injected in-memory for tests), then the EventQueue and
-            // EventsManager. Drain triggers wire up here:
-            //   - reachability flips to SATISFIED → drain
-            //   - this initialize() call itself → one drain so cold-start
-            //     flushes events left over from a previous app session
-            val dao = daoOverride ?: EventQueueDatabase.create(context.applicationContext).queuedEventDao()
-            val queue =
-                EventQueue(
-                    httpClient = client,
-                    dao = dao,
-                    maxQueueSize = config.maxQueueSize,
-                    logger = logger,
-                )
-            val events =
-                EventsManager(
-                    queue = queue,
-                    storage = store,
-                    anonymousId = anon,
-                    logger = logger,
-                )
-            val reach = reachabilityOverride ?: NetworkCallbackReachability(context.applicationContext)
-            queue.bindReachability(reach)
-
-            this.config = config
-            this.storage = store
-            this.anonymousId = anon
-            this.httpClient = client
-            this.identityManager = identity
-            this.eventQueue = queue
-            this.eventsManager = events
-            this.reachability = reach
-            this.appContext = context.applicationContext
 
             logger.info {
                 "Initialized PYRXSynapse v${PyrxConstants.SDK_VERSION} " +
                     "(workspace=${config.workspaceId}, env=${config.environment})"
             }
 
+            // Apply any pending tracking-enabled value captured before
+            // initialize() — apps that flip the switch at process start
+            // shouldn't have to time the call after init.
+            pendingTrackingEnabled?.let { pending ->
+                privacy.setTrackingEnabled(pending)
+                pendingTrackingEnabled = null
+            }
+
             // Kick a drain so events persisted in a previous session get a
             // shot at flushing immediately. Fire-and-forget — we do not
             // block initialize() on network I/O.
-            queue.drainNow()
+            eventQueue?.drainNow()
+
+            // Replay any cold-start push payload buffered before initialize()
+            // ran. We do this AFTER drainNow() so attribution events ride
+            // into the same drain pass and reach the backend together with
+            // the events the previous session left behind.
+            pendingColdStartIntent?.let { intent ->
+                pendingColdStartIntent = null
+                eventsManager?.let { recordColdStartAttribution(intent, it) }
+            }
         }
+    }
+
+    /**
+     * Idempotency guard for [initialize]. Returns true when the second call
+     * is a no-op (identical config). Throws when the new config differs from
+     * the already-stored one. Extracted so [initialize] stays under detekt's
+     * function-body-length budget.
+     */
+    @Throws(PyrxError::class)
+    private fun isAlreadyInitialized(config: PyrxConfig): Boolean {
+        val existing = this.config ?: return false
+        if (existing == config) {
+            logger.info { "initialize(...) called twice with identical config — no-op." }
+            return true
+        }
+        throw PyrxError.AlreadyInitialized
+    }
+
+    /**
+     * Construct + install every service the SDK owns (network, identity,
+     * events queue, reachability, privacy). Returns the constructed
+     * [PrivacyManager] so the caller can apply pending tracking-enabled
+     * state without a second field lookup.
+     *
+     * Extracted from [initialize] so the public method stays under detekt's
+     * function-body-length budget.
+     */
+    private fun wireServices(
+        context: Context,
+        config: PyrxConfig,
+        store: PyrxStorage,
+        anon: String,
+        overrides: TestOverrides,
+    ): PrivacyManager {
+        // Build the network + identity layer now (not lazily) so the first
+        // call to identify() pays no construction cost on the request path.
+        val session = overrides.session ?: OkHttpSession()
+        val client = HTTPClient(config = config, session = session)
+        val identity =
+            IdentityManager(
+                storage = store,
+                httpClient = client,
+                environment = WireEnvironment.from(config.environment),
+                logger = logger,
+            )
+
+        // PR 3 — events + offline queue. Build the DAO (real Room db or
+        // injected in-memory for tests), then the EventQueue and
+        // EventsManager. Drain triggers wire up here: reachability flips
+        // to SATISFIED → drain; initialize() also fires one drain.
+        val dao = overrides.dao ?: EventQueueDatabase.create(context.applicationContext).queuedEventDao()
+        val queue = EventQueue(httpClient = client, dao = dao, maxQueueSize = config.maxQueueSize, logger = logger)
+        val events = EventsManager(queue = queue, storage = store, anonymousId = anon, logger = logger)
+        val reach = overrides.reachability ?: NetworkCallbackReachability(context.applicationContext)
+        queue.bindReachability(reach)
+
+        // PR 5 — privacy controls.
+        val privacy =
+            PrivacyManager(
+                storage = store,
+                queue = queue,
+                httpClient = client,
+                appContext = context.applicationContext,
+                logger = logger,
+            )
+
+        this.config = config
+        this.storage = store
+        this.anonymousId = anon
+        this.httpClient = client
+        this.identityManager = identity
+        this.eventQueue = queue
+        this.eventsManager = events
+        this.reachability = reach
+        this.privacyManager = privacy
+        this.appContext = context.applicationContext
+
+        return privacy
     }
 
     /** Adjust the runtime log level. Safe to call before or after [initialize]. */
@@ -250,21 +362,48 @@ public object Pyrx {
      * Snapshot of the SDK's internal state. Useful for debug menus and
      * support bundles. Reading is non-throwing — missing storage values
      * surface as `false` / `null` rather than raising.
+     *
+     * Suspend because PR 5 (Phase 8.4b Task 8.4b.11) consults the event
+     * queue for depth + last drain timestamp; both are actor-isolated reads.
+     *
+     * PR 5 enrichment (Phase 8.4b Task 8.4b.11) adds:
+     *   - environment / baseUrl       — config echo.
+     *   - deviceTokenFingerprint      — last-8-char view (never full token).
+     *   - trackingEnabled             — privacy kill switch state.
+     *   - notificationPermission      — POST_NOTIFICATIONS state (read-only).
+     *   - eventQueueDepth             — pending queue count.
+     *   - lastDrainAt                 — wall-clock millis of most recent
+     *                                   drain attempt (any outcome).
      */
-    public fun debugInfo(): PyrxDebugInfo {
+    public suspend fun debugInfo(): PyrxDebugInfo {
         val cfg = config
         val store = storage
         val externalId = store?.let { runCatchingStorage { it.get(PyrxStorageKey.EXTERNAL_ID) } }
         val deviceToken = store?.let { runCatchingStorage { it.get(PyrxStorageKey.DEVICE_TOKEN) } }
+        val privacy = privacyManager
+        val queue = eventQueue
+        val trackingEnabled = privacy?.trackingEnabled ?: (pendingTrackingEnabled ?: true)
+        val notificationPermission =
+            privacy?.notificationPermissionStatus()
+                ?: PrivacyManager.staticNotificationPermissionStatus(appContext)
+        val queueDepth = queue?.debugQueueDepth() ?: 0
+        val lastDrainAt = queue?.debugLastDrainAt()
         return PyrxDebugInfo(
             sdkVersion = PyrxConstants.SDK_VERSION,
             platform = PyrxConstants.PLATFORM,
             initialized = cfg != null,
             workspaceId = cfg?.workspaceId,
+            environment = cfg?.environment?.name?.lowercase(),
+            baseUrl = cfg?.baseUrl,
             logLevel = logger.level,
             anonymousId = anonymousId,
             hasExternalId = externalId != null,
             hasDeviceToken = deviceToken != null,
+            deviceTokenFingerprint = PyrxDebugInfo.fingerprint(forDeviceToken = deviceToken),
+            trackingEnabled = trackingEnabled,
+            notificationPermission = notificationPermission,
+            eventQueueDepth = queueDepth,
+            lastDrainAt = lastDrainAt,
         )
     }
 
@@ -665,6 +804,201 @@ public object Pyrx {
         throw PyrxError.NotInitialized
     }
 
+    // MARK: - Privacy API (PR 5)
+
+    /**
+     * Toggle the SDK's tracking kill switch.
+     *
+     * When `enabled == false`:
+     *   - New `track` / `screen` calls still ENQUEUE events to the on-disk
+     *     queue (so the SDK preserves user intent through the flip).
+     *   - The drain loop refuses to send anything until tracking is
+     *     re-enabled. The next `setTrackingEnabled(true)` automatically
+     *     triggers a drain so queued events flush as soon as the user
+     *     re-opts-in.
+     *
+     * When `enabled == true` (the default):
+     *   - Normal SDK behaviour — `enqueue` triggers a drain immediately.
+     *
+     * Safe to call BEFORE [initialize] — the value is buffered and applied
+     * as soon as initialize() completes. This makes the typical opt-out
+     * pattern (read user preference at process start, flip the switch
+     * before initialise) ergonomic.
+     *
+     * The flag is NOT persisted across launches. Apps that want a sticky
+     * opt-out should restore the choice from their own preferences store on
+     * every launch.
+     *
+     * Mirrors iOS `Pyrx.setTrackingEnabled(_:)`.
+     */
+    public suspend fun setTrackingEnabled(enabled: Boolean) {
+        val manager = privacyManager
+        if (manager != null) {
+            manager.setTrackingEnabled(enabled)
+        } else {
+            // Pre-init — buffer for replay during initialize().
+            pendingTrackingEnabled = enabled
+            logger.debug { "setTrackingEnabled($enabled) called before initialize — buffered." }
+        }
+    }
+
+    /**
+     * GDPR right-to-erasure cascade.
+     *
+     * Order of operations (intentional — local wipe first so a backend
+     * failure does NOT leave on-device data behind):
+     *
+     *   1. Wipe EncryptedStore (anonymousId + externalId + deviceToken).
+     *   2. Wipe the on-disk event queue (drop every pending event without
+     *      sending).
+     *   3. POST `/v1/contacts/{external_id}/delete` to cascade server-side.
+     *      The SDK swallows 4xx responses (treats them as already-deleted);
+     *      5xx / transport errors propagate.
+     *
+     * Skipped step 3 if the SDK had no identifier at all (cold-installed
+     * SDK that never enqueued an event).
+     *
+     * @throws PyrxError.NotInitialized if [initialize] has not completed.
+     * @throws PyrxError.Network on transport / 5xx failure. Local data has
+     *         already been wiped at that point — callers should treat the
+     *         throw as "tell the user to retry the server side" rather than
+     *         "the wipe didn't happen".
+     */
+    @Throws(PyrxError::class)
+    public suspend fun deleteUser() {
+        val manager = privacyManager ?: throw PyrxError.NotInitialized
+        manager.deleteUser()
+        // After a successful local wipe the in-memory anonymousId is no
+        // longer valid (storage has been emptied). Clearing it here means a
+        // subsequent track() before the next initialize() correctly throws
+        // NotInitialized rather than silently re-using a stale identifier.
+        anonymousId = null
+    }
+
+    // MARK: - Cold-start attribution (PR 5)
+
+    /**
+     * Bridge a launcher Activity's [Intent] (received via `getIntent()` or
+     * `onNewIntent(...)` when the user opens the app from a push tap) into
+     * an `$app_opened_from_push` attribution event.
+     *
+     * The event is enqueued through the events queue (offline-durable,
+     * retried automatically). Attributes include the campaign-emitter
+     * `pyrx_attrs_*` keys, the canonical `push_log_id`, and (if present) the
+     * deep-link URI so downstream analytics can re-derive the click target.
+     *
+     * No-op if [intent] does not carry a Synapse `pyrx_push_log_id` extra
+     * — legacy / cross-vendor pushes or a plain Activity launch pass through
+     * silently (so analytics doesn't over-count app opens).
+     *
+     * Safe to call BEFORE [initialize] — the intent is buffered and replayed
+     * once the SDK initialises. This makes the typical wiring pattern
+     * (launcher Activity calls `Pyrx.recordColdStartLaunch(intent)` in
+     * `onCreate`) ergonomic regardless of whether [initialize] has finished.
+     *
+     * Mirrors iOS `Pyrx.recordColdStartLaunch(userInfo:)`.
+     *
+     * @param intent The launcher Activity's intent (from `getIntent()` /
+     *               `onNewIntent(...)`). Pass `null` to no-op (convenient
+     *               for callers that don't want to null-check upstream).
+     */
+    public suspend fun recordColdStartLaunch(intent: Intent?) {
+        if (intent == null) return
+        val events = eventsManager
+        if (events == null) {
+            // Pre-init — stash for replay during initialize().
+            pendingColdStartIntent = intent
+            logger.debug { "recordColdStartLaunch before initialize — payload buffered." }
+            return
+        }
+        recordColdStartAttribution(intent = intent, events = events)
+    }
+
+    /**
+     * Inner implementation of [recordColdStartLaunch] / the deferred replay
+     * in [initialize]. Parses the intent extras for the Synapse push payload
+     * and fires `$app_opened_from_push` via the events queue.
+     *
+     * No-op (with a debug log) if the intent does not carry a Synapse
+     * `pyrx_push_log_id` extra.
+     */
+    private suspend fun recordColdStartAttribution(
+        intent: Intent,
+        events: EventsManager,
+    ) {
+        val data = extrasMap(intent)
+        val pushLogId = parsePushLogId(data[KEY_PUSH_LOG_ID])
+        if (pushLogId == null) {
+            logger.debug { "recordColdStartAttribution: no pyrx_push_log_id — skipping \$app_opened_from_push." }
+            return
+        }
+        val attrs = buildColdStartAttributes(data = data, pushLogId = pushLogId)
+        try {
+            events.track(eventName = COLD_START_EVENT, properties = attrs)
+            logger.info { "recordColdStartAttribution: \$app_opened_from_push enqueued." }
+        } catch (e: Throwable) {
+            logger.warning { "recordColdStartAttribution: track failed — ${e.message}" }
+        }
+    }
+
+    /**
+     * Build the attribution event's attributes from the flat intent-extras
+     * map. Pulled into its own function so [recordColdStartAttribution]
+     * stays under detekt's complexity budget.
+     */
+    private fun buildColdStartAttributes(
+        data: Map<String, String>,
+        pushLogId: String,
+    ): Map<String, JSONValue> {
+        val attrs = mutableMapOf<String, JSONValue>()
+        for ((rawKey, value) in data) {
+            if (rawKey.startsWith(PREFIX_PYRX_ATTRS)) {
+                val key = rawKey.removePrefix(PREFIX_PYRX_ATTRS)
+                if (key.isNotEmpty()) attrs[key] = JSONValue.Str(value)
+            }
+        }
+        // SDK-stamped — last write wins so a campaign cannot spoof the id.
+        attrs[KEY_ATTR_PUSH_LOG_ID] = JSONValue.Str(pushLogId)
+        // Annotate the deep link onto the attribution event so downstream
+        // analytics can re-derive the click target without re-parsing the
+        // original FCM payload.
+        data[KEY_DEEP_LINK]?.let { deepLink ->
+            attrs[KEY_ATTR_DEEP_LINK] = JSONValue.Str(deepLink)
+        }
+        return attrs
+    }
+
+    /**
+     * Walk Intent extras into a flat `Map<String, String>`. Numbers / bools
+     * are stringified via [toString] so the downstream parsers can stay
+     * uniform. Returns an empty map if the intent has no extras.
+     */
+    private fun extrasMap(intent: Intent): Map<String, String> {
+        val bundle = intent.extras ?: return emptyMap()
+        val out = mutableMapOf<String, String>()
+        for (key in bundle.keySet()) {
+            @Suppress("DEPRECATION") // bundle.get(key) is the only universal accessor
+            val value = bundle.get(key) ?: continue
+            out[key] = value.toString()
+        }
+        return out
+    }
+
+    /**
+     * Parse a UUID-shaped push_log_id from a raw string. Returns the
+     * lower-cased canonical form, or `null` if the string is null or
+     * not a valid UUID.
+     */
+    private fun parsePushLogId(raw: String?): String? {
+        if (raw.isNullOrEmpty()) return null
+        return try {
+            UUID.fromString(raw).toString()
+        } catch (_: IllegalArgumentException) {
+            logger.warning { "recordColdStartLaunch: malformed UUID in pyrx_push_log_id='$raw'" }
+            null
+        }
+    }
+
     // MARK: - Internal seam for tests
 
     /**
@@ -689,6 +1023,9 @@ public object Pyrx {
         eventQueue = null
         eventsManager = null
         reachability = null
+        privacyManager = null
+        pendingTrackingEnabled = null
+        pendingColdStartIntent = null
         appContext = null
         pushBridge = null
         logger.setLevel(LogLevel.INFO)
@@ -720,4 +1057,29 @@ public object Pyrx {
         } catch (_: Throwable) {
             null
         }
+
+    // MARK: - Constants
+
+    /**
+     * Canonical event name for cold-start push attribution. Matches iOS
+     * `Pyrx.recordColdStartLaunch` → `$app_opened_from_push`. Analytics
+     * consumers join `$app_opened_from_push` events with the prior
+     * `/v1/push/opened` row via the `push_log_id` attribute.
+     */
+    private const val COLD_START_EVENT: String = "\$app_opened_from_push"
+
+    /** Intent-extra key for the canonical push log id (set by the campaign emitter). */
+    private const val KEY_PUSH_LOG_ID: String = "pyrx_push_log_id"
+
+    /** Intent-extra key for the optional deep-link URI. */
+    private const val KEY_DEEP_LINK: String = "pyrx_deep_link"
+
+    /** Prefix that identifies a campaign-emitter-attached attribute on the push payload. */
+    private const val PREFIX_PYRX_ATTRS: String = "pyrx_attrs_"
+
+    /** Attribute key under which we re-stamp the push_log_id on the attribution event. */
+    private const val KEY_ATTR_PUSH_LOG_ID: String = "push_log_id"
+
+    /** Attribute key for the deep-link URI on the attribution event. */
+    private const val KEY_ATTR_DEEP_LINK: String = "deep_link"
 }
