@@ -7,6 +7,7 @@
 plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.kotlin.serialization)
     `maven-publish`
 }
 
@@ -66,6 +67,14 @@ dependencies {
     implementation(libs.kotlinx.coroutines.android)
     implementation(libs.androidx.security.crypto)
     implementation(libs.androidx.annotation)
+
+    // PR 2 — network + identity. Exposed as `api` so downstream modules
+    // (synapse-push, synapse-inapp) can share the same OkHttp Call.Factory
+    // and the same kotlinx.serialization JSON instance without re-declaring
+    // versions. Mirrors iOS PR #2 which puts `URLSession` + `Foundation`
+    // JSON in the public surface of the core target.
+    api(libs.okhttp)
+    api(libs.kotlinx.serialization.json)
 
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
