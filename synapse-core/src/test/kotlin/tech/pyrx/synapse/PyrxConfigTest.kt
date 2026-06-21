@@ -86,7 +86,7 @@ class PyrxConfigTest {
     @Test
     fun `SDK constants match the locked release values`() {
         // PR 7 release script bumps SDK_VERSION; PLATFORM is forever "android".
-        assertEquals("0.1.0", PyrxConstants.SDK_VERSION)
+        assertEquals("0.1.2", PyrxConstants.SDK_VERSION)
         assertEquals("android", PyrxConstants.PLATFORM)
     }
 }

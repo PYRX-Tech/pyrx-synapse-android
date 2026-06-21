@@ -56,7 +56,7 @@ class PushRegistrationTest {
         "contact_id":"66666666-6666-6666-6666-666666666666",
         "platform":"android","push_token":"fcm-token-xyz",
         "bundle_id":"tech.pyrx.synapse.push.test","app_version":"1.0.0",
-        "sdk_version":"0.1.0","sdk_platform":"android","os_version":"Android 14",
+        "sdk_version":"0.1.2","sdk_platform":"android","os_version":"Android 14",
         "device_model":"Google Pixel 8","locale":"en_US","timezone":"UTC",
         "environment":"live","push_enabled":true,
         "last_seen_at":"2026-06-21T00:00:00.000Z",
@@ -137,7 +137,7 @@ class PushRegistrationTest {
                 "bundle_id must be present",
             )
             assertNotNull(body["app_version"]?.jsonPrimitive?.contentOrNull, "app_version must be present")
-            assertEquals("0.1.0", body["sdk_version"]?.jsonPrimitive?.contentOrNull)
+            assertEquals("0.1.2", body["sdk_version"]?.jsonPrimitive?.contentOrNull)
             assertEquals("android", body["sdk_platform"]?.jsonPrimitive?.contentOrNull)
             val osVersion = body["os_version"]?.jsonPrimitive?.contentOrNull
             assertNotNull(osVersion)
