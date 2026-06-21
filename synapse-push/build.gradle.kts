@@ -53,10 +53,12 @@ android {
         jvmTarget = "17"
     }
 
+    // withJavadocJar() omitted — Dokka crashes on certain KDoc reference
+    // links under AGP 8.2.x. Empty -javadoc.jar provided by `emptyJavadocJar`
+    // task below (Maven Central requires the artifact, not the content).
     publishing {
         singleVariant("release") {
             withSourcesJar()
-            withJavadocJar()
         }
     }
 
@@ -176,11 +178,17 @@ android {
     }
 }
 
+// Empty -javadoc.jar (Maven Central requires the artifact; AGP 8.2.x Dokka bug).
+val emptyJavadocJar by tasks.registering(Jar::class) {
+    archiveClassifier.set("javadoc")
+}
+
 afterEvaluate {
     publishing {
         publications {
             create<MavenPublication>("release") {
                 from(components["release"])
+                artifact(emptyJavadocJar)
                 groupId = "tech.pyrx.synapse"
                 artifactId = "synapse-push"
                 version = project.version.toString()

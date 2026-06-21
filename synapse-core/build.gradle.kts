@@ -57,10 +57,14 @@ android {
     }
 
     // Required for AGP 8+ — produce a sources JAR for downstream consumers.
+    // withJavadocJar() omitted: Android's JavaDocGenerationTask delegates to
+    // Dokka which crashes on certain KDoc reference links under AGP 8.2.x +
+    // bundled Dokka version. We provide an empty -javadoc.jar artifact via
+    // a custom Jar task below to satisfy Maven Central's requirement that
+    // a -javadoc.jar exists (content can be empty).
     publishing {
         singleVariant("release") {
             withSourcesJar()
-            withJavadocJar()
         }
     }
 
@@ -199,6 +203,12 @@ android {
     }
 }
 
+// Empty javadoc JAR — Maven Central requires -javadoc.jar exist (workaround
+// for AGP 8.2.x + Dokka KDoc-link bug; see publishing { } comment above).
+val emptyJavadocJar by tasks.registering(Jar::class) {
+    archiveClassifier.set("javadoc")
+}
+
 // Maven coords — wired now, publish job activated in PR 7 release work.
 // Sonatype Central credentials are read from secrets in .github/workflows/publish.yml.
 afterEvaluate {
@@ -206,6 +216,7 @@ afterEvaluate {
         publications {
             create<MavenPublication>("release") {
                 from(components["release"])
+                artifact(emptyJavadocJar)
 
                 groupId = "tech.pyrx.synapse"
                 artifactId = "synapse-core"
