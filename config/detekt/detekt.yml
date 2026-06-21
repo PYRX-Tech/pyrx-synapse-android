@@ -11,7 +11,13 @@ complexity:
   TooManyFunctions:
     active: true
     thresholdInClasses: 20
-    thresholdInObjects: 20
+    # Pyrx is the public SDK singleton — it legitimately exposes many APIs
+    # (identify, alias, logout, track, screen, handleDeviceToken,
+    # handleNotificationTap, handleActionButton, handleRegistrationError,
+    # installPushBridge, pushHooks, debugInfo, setLogLevel, etc.) plus the
+    # private helpers that back them. Bumped to 25 to accommodate PR 4's
+    # push surface; any growth past that should re-examine grouping.
+    thresholdInObjects: 25
   LongParameterList:
     active: true
     functionThreshold: 7

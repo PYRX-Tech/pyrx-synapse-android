@@ -19,6 +19,17 @@ androidx-room = "2.6.1"
 okhttp = "4.12.0"
 kotlinx-serialization = "1.6.3"
 
+# Firebase (PR 4 — push registration + handlers)
+#
+# BoM is the canonical way to ship Firebase on Android — it pins every
+# `firebase-*` artifact to a known-compatible matrix without per-artifact
+# version bumps. We declare the BoM once here and pull `firebase-messaging`
+# into the synapse-push module without a version (BoM resolves it).
+#
+# Pinned to 34.15.0 (June 2026) — current at branch time. Bump by editing
+# this single line; CI's deps lockfile update catches the rest.
+firebase-bom = "34.15.0"
+
 # Test
 junit = "4.13.2"
 mockk = "1.13.9"
@@ -42,6 +53,11 @@ androidx-room-testing = { module = "androidx.room:room-testing", version.ref = "
 # Network + serialization
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+
+# Firebase (PR 4 — push). BoM owns the version of every `firebase-*` artifact
+# resolved through it; `firebase-messaging` declares `version` only via BoM.
+firebase-bom = { module = "com.google.firebase:firebase-bom", version.ref = "firebase-bom" }
+firebase-messaging = { module = "com.google.firebase:firebase-messaging" }
 
 # Test
 junit = { module = "junit:junit", version.ref = "junit" }
