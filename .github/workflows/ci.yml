@@ -1,0 +1,91 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Cancel in-flight runs for the same branch on new pushes — saves CI minutes
+# and keeps the merge queue responsive.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    name: Build + JVM unit tests (JDK ${{ matrix.jdk }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        jdk: ['17']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK ${{ matrix.jdk }}
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ matrix.jdk }}
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          # Cache Gradle home + project caches; reuse across runs on the same branch.
+          cache-read-only: ${{ github.ref != format('refs/heads/{0}', 'main') }}
+
+      - name: Assemble (debug)
+        run: ./gradlew --no-daemon assembleDebug
+
+      - name: JVM unit tests
+        run: ./gradlew --no-daemon test
+
+      - name: Upload test reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: |
+            **/build/reports/tests/
+            **/build/test-results/
+
+  lint:
+    name: ktlint + detekt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-34 build-tools;34.0.0'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: ktlint
+        run: ./gradlew --no-daemon ktlintCheck
+
+      - name: detekt
+        run: ./gradlew --no-daemon detekt
+
+      - name: Upload lint reports on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-reports
+          path: |
+            **/build/reports/ktlint/
+            **/build/reports/detekt/

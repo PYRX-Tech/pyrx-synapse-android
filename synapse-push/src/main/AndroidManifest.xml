@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  synapse-push library manifest. POST_NOTIFICATIONS permission + FCM service
+  declarations land in PR 4 (Phase 8.4b.7).
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

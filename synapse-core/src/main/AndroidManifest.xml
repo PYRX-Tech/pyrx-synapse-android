@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Library manifest for synapse-core.
+  Deliberately minimal — the SDK requires no permissions, services, or
+  components at this layer. INTERNET permission is added by host apps that
+  consume HTTP (PR 2 wires that). Push permissions land in synapse-push.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />

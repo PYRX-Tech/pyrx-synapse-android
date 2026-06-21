@@ -1,0 +1,62 @@
+# detekt configuration — overlays detekt's default config (buildUponDefaultConfig=true).
+# Tightened in a couple of places appropriate for a public SDK; otherwise we
+# trust upstream defaults.
+
+build:
+  maxIssues: 0
+  excludeCorrectable: false
+
+complexity:
+  active: true
+  TooManyFunctions:
+    active: true
+    thresholdInClasses: 20
+    thresholdInObjects: 20
+  LongParameterList:
+    active: true
+    functionThreshold: 7
+    constructorThreshold: 7
+
+style:
+  active: true
+  MagicNumber:
+    active: false  # SDK constants (SDK version, retry counts) are often numeric literals
+  ReturnCount:
+    active: true
+    max: 4
+  WildcardImport:
+    active: true
+  ForbiddenComment:
+    active: true
+    comments:
+      - reason: 'Forbidden TODO marker. Convert to a tracked issue before merge.'
+        value: 'TODO:'
+      - reason: 'Forbidden FIXME marker. Convert to a tracked issue before merge.'
+        value: 'FIXME:'
+      - reason: 'Forbidden STOPSHIP marker.'
+        value: 'STOPSHIP:'
+
+naming:
+  active: true
+  FunctionParameterNaming:
+    active: true
+  TopLevelPropertyNaming:
+    active: true
+
+potential-bugs:
+  active: true
+  UnsafeCallOnNullableType:
+    active: true
+
+exceptions:
+  active: true
+  TooGenericExceptionCaught:
+    active: false  # SDK swallows broad exceptions intentionally on init paths
+  SwallowedException:
+    active: true
+
+empty-blocks:
+  active: true
+  EmptyFunctionBlock:
+    active: true
+    ignoreOverridden: true

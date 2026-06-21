@@ -1,0 +1,40 @@
+# Gradle version catalog. Pin every dependency here so module build scripts
+# stay declarative and bumps are one-file PRs.
+
+[versions]
+# Toolchain
+agp = "8.2.2"
+kotlin = "1.9.22"
+coroutines = "1.7.3"
+ktlint = "12.1.0"
+detekt = "1.23.6"
+
+# AndroidX
+androidx-security-crypto = "1.1.0-alpha06"
+androidx-annotation = "1.7.1"
+
+# Test
+junit = "4.13.2"
+mockk = "1.13.9"
+kotlin-test = "1.9.22"
+
+[libraries]
+# Core
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-android = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+
+# AndroidX
+androidx-security-crypto = { module = "androidx.security:security-crypto", version.ref = "androidx-security-crypto" }
+androidx-annotation = { module = "androidx.annotation:annotation", version.ref = "androidx-annotation" }
+
+# Test
+junit = { module = "junit:junit", version.ref = "junit" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+kotlin-test = { module = "org.jetbrains.kotlin:kotlin-test", version.ref = "kotlin-test" }
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutines" }
+
+[plugins]
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
