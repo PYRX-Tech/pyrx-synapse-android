@@ -19,6 +19,13 @@ ktlint_standard_property-naming = enabled
 ij_kotlin_allow_trailing_comma = true
 ij_kotlin_allow_trailing_comma_on_call_site = true
 
+# Compose @Composable functions are PascalCase by convention. ktlint's
+# function-naming rule fights this — disable for the sample app where every
+# screen + reusable bit is a Composable. Production SDK code (synapse-core,
+# synapse-push, synapse-inapp) is unaffected and retains the standard rule.
+[sample-app/**/*.kt]
+ktlint_standard_function-naming = disabled
+
 [*.{xml,yml,yaml,json,toml}]
 indent_size = 2
 
