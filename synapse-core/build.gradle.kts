@@ -8,6 +8,7 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.serialization)
+    alias(libs.plugins.ksp)
     `maven-publish`
 }
 
@@ -76,10 +77,23 @@ dependencies {
     api(libs.okhttp)
     api(libs.kotlinx.serialization.json)
 
+    // PR 3 — offline event queue. Room is the persistence layer; runtime is
+    // `implementation` (downstream modules don't need to depend on Room
+    // directly), KSP processes the compile-time @Database / @Dao annotations.
+    // ktx pulls in coroutine-aware suspend DAO support.
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
+
     testImplementation(libs.junit)
     testImplementation(libs.kotlin.test)
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.mockk)
+    // PR 3 — Room in-memory database + Robolectric give us an Android
+    // Context in JVM unit tests so Room can open SQLite without an emulator.
+    testImplementation(libs.androidx.room.testing)
+    testImplementation(libs.androidx.test.core)
+    testImplementation(libs.robolectric)
 }
 
 // Apply explicit-api strict ONLY to the production source sets — test

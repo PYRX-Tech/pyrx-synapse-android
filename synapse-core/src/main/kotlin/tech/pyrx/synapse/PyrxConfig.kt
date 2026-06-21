@@ -24,6 +24,12 @@ import java.util.UUID
  * @property baseUrl Ingestion API base URL. Defaults to the production endpoint
  *                   `https://synapse-events.pyrx.tech`.
  * @property logLevel Verbosity for the internal logger. Defaults to [LogLevel.INFO].
+ * @property maxQueueSize Maximum number of events the offline queue retains
+ *                        on disk before evicting the oldest. PR 3 introduces
+ *                        the queue; this knob exists so a host app with
+ *                        high event volume + intermittent connectivity can
+ *                        opt into a larger or smaller buffer. Defaults to
+ *                        [DEFAULT_MAX_QUEUE_SIZE] (matches iOS PR #3).
  */
 public data class PyrxConfig(
     val workspaceId: UUID,
@@ -31,6 +37,7 @@ public data class PyrxConfig(
     val environment: PyrxEnvironment = PyrxEnvironment.PRODUCTION,
     val baseUrl: String = DEFAULT_BASE_URL,
     val logLevel: LogLevel = LogLevel.INFO,
+    val maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
 ) {
     /**
      * Validate this configuration. Called by [Pyrx.initialize] before any
@@ -56,6 +63,7 @@ public data class PyrxConfig(
             !trimmedKey.startsWith("psk_") -> "apiKey must start with 'psk_'"
             !baseUrl.startsWith("http://") && !baseUrl.startsWith("https://") ->
                 "baseUrl must use http(s) scheme"
+            maxQueueSize < 1 -> "maxQueueSize must be >= 1"
             else -> null
         }
     }
@@ -63,5 +71,13 @@ public data class PyrxConfig(
     public companion object {
         /** Default production ingestion endpoint. Matches iOS `PyrxConfig.defaultBaseUrl`. */
         public const val DEFAULT_BASE_URL: String = "https://synapse-events.pyrx.tech"
+
+        /**
+         * Default offline-queue bound. 1000 events × ~500 bytes/event ≈ 500 KB
+         * on disk worst-case — fits comfortably within a host app's cache
+         * budget while covering hours of offline activity for typical apps.
+         * Matches iOS `PyrxConfig.defaultMaxQueueSize`.
+         */
+        public const val DEFAULT_MAX_QUEUE_SIZE: Int = 1000
     }
 }
