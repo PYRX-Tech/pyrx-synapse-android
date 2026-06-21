@@ -6,6 +6,7 @@
 
 plugins {
     alias(libs.plugins.android.library) apply false
+    alias(libs.plugins.android.application) apply false
     alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.ktlint) apply false
     alias(libs.plugins.detekt) apply false
@@ -35,7 +36,17 @@ subprojects {
 
     extensions.configure<io.gitlab.arturbosch.detekt.extensions.DetektExtension> {
         toolVersion = "1.23.6"
-        config.setFrom(files("${rootProject.projectDir}/config/detekt/detekt.yml"))
+        // sample-app uses a relaxed overlay so Compose `@Composable`
+        // PascalCase naming + long Composable screens don't trip the
+        // stricter SDK rules. SDK modules (synapse-core, synapse-push,
+        // synapse-inapp) keep the strict config.
+        val configFile =
+            if (project.name == "sample-app") {
+                "${rootProject.projectDir}/config/detekt/detekt-sample.yml"
+            } else {
+                "${rootProject.projectDir}/config/detekt/detekt.yml"
+            }
+        config.setFrom(files(configFile))
         buildUponDefaultConfig = true
         autoCorrect = false
         parallel = true

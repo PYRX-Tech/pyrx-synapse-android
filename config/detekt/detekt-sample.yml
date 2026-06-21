@@ -1,0 +1,61 @@
+# detekt-sample.yml
+#
+# Sample-app-specific detekt overlay. The sample app is a Compose reference
+# implementation — `@Composable` functions are PascalCase by convention and
+# routinely exceed detekt's default 60-line LongMethod threshold (each
+# screen has multiple UI elements + state callbacks). The SDK modules
+# (synapse-core, synapse-push, synapse-inapp) keep the stricter rules
+# from `config/detekt/detekt.yml`.
+#
+# This file is OVERLAY-only: build upon the default config + the project
+# default in detekt.yml, then relax the two rules that fight Compose
+# idioms.
+
+build:
+  maxIssues: 0
+  excludeCorrectable: false
+
+complexity:
+  active: true
+  LongMethod:
+    # Compose screens routinely run 60-100 lines as the canonical pattern
+    # is `@Composable fun ScreenName() { Column { ... } }` with every UI
+    # element + state callback inline. The SDK rule (60) would force us
+    # to fragment screens artificially.
+    active: true
+    threshold: 120
+  TooManyFunctions:
+    active: true
+    thresholdInClasses: 20
+    thresholdInObjects: 35
+
+naming:
+  active: true
+  FunctionNaming:
+    # @Composable functions are PascalCase by convention (matches the
+    # standard ktlint disable in .editorconfig).
+    active: false
+  FunctionParameterNaming:
+    active: true
+  TopLevelPropertyNaming:
+    active: true
+
+style:
+  active: true
+  MagicNumber:
+    active: false
+  ReturnCount:
+    active: true
+    max: 4
+  WildcardImport:
+    active: true
+
+potential-bugs:
+  active: true
+
+exceptions:
+  active: true
+  TooGenericExceptionCaught:
+    active: false  # Sample swallows errors so the demo doesn't crash
+  SwallowedException:
+    active: false  # Same — runCatching by-design swallows

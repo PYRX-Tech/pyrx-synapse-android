@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  sample-app/themes.xml
+
+  Material 3 theme — the actual color scheme is supplied by Compose
+  (MaterialTheme + dynamicColorScheme on Android 12+) inside MainActivity.
+  This XML theme is the SPLASH/window theme — applied before Compose can
+  draw — so we keep it deliberately minimal: just the right window
+  background + status bar handling so the app doesn't flash white before
+  the first frame paints.
+-->
+<resources>
+    <style name="Theme.PyrxSample" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">?android:colorBackground</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+    </style>
+</resources>

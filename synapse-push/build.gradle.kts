@@ -25,6 +25,7 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     `maven-publish`
+    jacoco
 }
 
 group = "tech.pyrx.synapse"
@@ -104,6 +105,72 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
     ) {
         compilerOptions {
             freeCompilerArgs.add("-Xexplicit-api=strict")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JaCoCo coverage (Phase 8.4b Task 8.4b.12)
+// ---------------------------------------------------------------------------
+// Mirrors synapse-core wiring. synapse-push has a smaller surface (push
+// registration + tap/click telemetry + device metadata + Firebase service
+// shim) so the coverage gate applies to the same set of generated reports.
+jacoco {
+    toolVersion = "0.8.11"
+}
+
+tasks.register<JacocoReport>("jacocoTestReport") {
+    dependsOn("testDebugUnitTest")
+    group = "verification"
+    description = "Generates JaCoCo line/branch coverage report for synapse-push unit tests."
+
+    reports {
+        html.required.set(true)
+        xml.required.set(true)
+        csv.required.set(false)
+    }
+
+    val excludes =
+        listOf(
+            "**/R.class",
+            "**/R\$*.class",
+            "**/BuildConfig.*",
+            "**/Manifest*.*",
+            "**/*Test*.*",
+            "android/**/*.*",
+            "**/*\$\$serializer.*",
+            "**/*\$Companion.*",
+            "**/*\$WhenMappings.*",
+            // PushModulePlaceholder is the empty marker so the module
+            // compiles with no API surface in earlier PRs; it has no logic.
+            "**/PushModulePlaceholder*",
+        )
+
+    val kotlinClasses =
+        fileTree("${layout.buildDirectory.get()}/tmp/kotlin-classes/debug") {
+            exclude(excludes)
+        }
+
+    classDirectories.setFrom(kotlinClasses)
+    sourceDirectories.setFrom(files("src/main/kotlin"))
+    executionData.setFrom(
+        fileTree(layout.buildDirectory.get()) {
+            include("jacoco/testDebugUnitTest.exec", "outputs/unit_test_code_coverage/debugUnitTest/*.exec")
+        },
+    )
+}
+
+tasks.withType<Test>().configureEach {
+    extensions.configure<JacocoTaskExtension> {
+        isIncludeNoLocationClasses = true
+        excludes = listOf("jdk.internal.*")
+    }
+}
+
+android {
+    buildTypes {
+        named("debug") {
+            enableUnitTestCoverage = true
         }
     }
 }

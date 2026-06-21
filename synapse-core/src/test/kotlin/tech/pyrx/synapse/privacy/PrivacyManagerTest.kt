@@ -22,6 +22,8 @@ package tech.pyrx.synapse.privacy
 import androidx.room.Room
 import androidx.test.core.app.ApplicationProvider
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.test.TestScope
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import org.junit.After
 import org.junit.Before
@@ -97,6 +99,34 @@ class PrivacyManagerTest {
         return HTTPClient(config = config, session = session)
     }
 
+    /**
+     * Builds an [EventQueue] wired to the supplied [testScope] so internal
+     * drain coroutines run on the test scheduler. Calls to [EventQueue.enqueue]
+     * launch background work in [scope]; without binding that to the test
+     * scheduler the default `Dispatchers.IO` races with the test thread —
+     * fine under normal JVM execution but exposed as a flake the moment
+     * JaCoCo bytecode-instruments the production classes (the rewrite shifts
+     * coroutine resume ordering just enough to reproducibly lose the race).
+     */
+    private fun makeQueue(
+        client: HTTPClient,
+        testScope: TestScope,
+    ): EventQueue =
+        EventQueue(
+            httpClient = client,
+            dao = dao,
+            maxQueueSize = 100,
+            logger = PyrxLogger(),
+            clock = FakeClock(),
+            scope = TestScope(UnconfinedTestDispatcher(testScope.testScheduler)),
+        )
+
+    /**
+     * Convenience overload for the non-coroutine tests (notification permission
+     * checks etc.) — they never enqueue anything, so the scope choice is
+     * inert. Using an [UnconfinedTestDispatcher] on a fresh [TestScope] avoids
+     * pulling in `Dispatchers.IO` for what is effectively a pure-fn test.
+     */
     private fun makeQueue(client: HTTPClient): EventQueue =
         EventQueue(
             httpClient = client,
@@ -104,6 +134,7 @@ class PrivacyManagerTest {
             maxQueueSize = 100,
             logger = PyrxLogger(),
             clock = FakeClock(),
+            scope = TestScope(UnconfinedTestDispatcher()),
         )
 
     private fun makeQueuedEvent(externalId: String = "user_42"): QueuedEvent =
@@ -142,7 +173,7 @@ class PrivacyManagerTest {
         runTest {
             val session = MockHTTPSession()
             val client = makeClient(session)
-            val queue = makeQueue(client)
+            val queue = makeQueue(client, this)
             val storage = InMemoryStorage()
             val privacy =
                 PrivacyManager(
@@ -170,7 +201,7 @@ class PrivacyManagerTest {
         runTest {
             val session = MockHTTPSession()
             val client = makeClient(session)
-            val queue = makeQueue(client)
+            val queue = makeQueue(client, this)
             val storage = InMemoryStorage()
             val privacy =
                 PrivacyManager(
@@ -212,7 +243,7 @@ class PrivacyManagerTest {
             // Backend delete returns an empty 200 — postPath discards the body.
             session.enqueueJsonSuccess(json = """{"status":"deleted"}""")
             val client = makeClient(session)
-            val queue = makeQueue(client)
+            val queue = makeQueue(client, this)
             val storage = InMemoryStorage()
             storage.set(PyrxStorageKey.EXTERNAL_ID, "user_42")
             storage.set(PyrxStorageKey.ANONYMOUS_ID, "anon-1")
@@ -265,7 +296,7 @@ class PrivacyManagerTest {
                 ),
             )
             val client = makeClient(session)
-            val queue = makeQueue(client)
+            val queue = makeQueue(client, this)
             val storage = InMemoryStorage()
             storage.set(PyrxStorageKey.EXTERNAL_ID, "user_42")
             val privacy =
@@ -297,7 +328,7 @@ class PrivacyManagerTest {
                 ),
             )
             val client = makeClient(session)
-            val queue = makeQueue(client)
+            val queue = makeQueue(client, this)
             val storage = InMemoryStorage()
             storage.set(PyrxStorageKey.EXTERNAL_ID, "user_42")
             val privacy =
@@ -330,7 +361,7 @@ class PrivacyManagerTest {
             val session = MockHTTPSession()
             session.enqueueJsonSuccess(json = """{"status":"deleted"}""")
             val client = makeClient(session)
-            val queue = makeQueue(client)
+            val queue = makeQueue(client, this)
             val storage = InMemoryStorage()
             // No externalId — only anonymous.
             storage.set(PyrxStorageKey.ANONYMOUS_ID, "anon-xyz")
@@ -360,7 +391,7 @@ class PrivacyManagerTest {
             // No canned response — if the backend gets called, the mock
             // throws "no canned response queued" and the test fails.
             val client = makeClient(session)
-            val queue = makeQueue(client)
+            val queue = makeQueue(client, this)
             val storage = InMemoryStorage() // empty
 
             val privacy =

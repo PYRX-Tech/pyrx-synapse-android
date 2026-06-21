@@ -10,6 +10,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     `maven-publish`
+    jacoco
 }
 
 group = "tech.pyrx.synapse"
@@ -22,6 +23,13 @@ android {
     defaultConfig {
         minSdk = 21
         consumerProguardFiles("consumer-rules.pro")
+
+        // Phase 8.4b Task 8.4b.12 — instrumented tests live in
+        // src/androidTest/ and run via `./gradlew connectedDebugAndroidTest`
+        // on a real device or emulator. They are NOT run by `./gradlew test`
+        // — that gate stays as-is (Robolectric only). On-device CI runs
+        // these as part of PR 7's release verification.
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
     compileOptions {
@@ -94,6 +102,14 @@ dependencies {
     testImplementation(libs.androidx.room.testing)
     testImplementation(libs.androidx.test.core)
     testImplementation(libs.robolectric)
+
+    // Instrumented (on-device) test dependencies. Used by src/androidTest/
+    // and only pulled in for `connectedDebugAndroidTest` — `./gradlew test`
+    // ignores this configuration entirely.
+    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
+    androidTestImplementation(libs.kotlin.test)
+    androidTestImplementation(libs.kotlinx.coroutines.test)
 }
 
 // Apply explicit-api strict ONLY to the production source sets — test
@@ -106,6 +122,78 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
     ) {
         compilerOptions {
             freeCompilerArgs.add("-Xexplicit-api=strict")
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// JaCoCo coverage (Phase 8.4b Task 8.4b.12)
+// ---------------------------------------------------------------------------
+// Coverage gate is 80%+ on identity/events/queue/push subsystems per
+// DEVELOPMENT_PLAN.md L1221. The Gradle Android plugin does not auto-wire
+// JaCoCo against `testDebugUnitTest` — we declare the report task manually so
+// `./gradlew :synapse-core:jacocoTestReport` produces an HTML + XML report.
+//
+// Excludes follow the standard Android/Room generated-code list so coverage
+// reflects hand-written SDK logic, not generated database glue.
+jacoco {
+    toolVersion = "0.8.11"
+}
+
+tasks.register<JacocoReport>("jacocoTestReport") {
+    dependsOn("testDebugUnitTest")
+    group = "verification"
+    description = "Generates JaCoCo line/branch coverage report for synapse-core unit tests."
+
+    reports {
+        html.required.set(true)
+        xml.required.set(true)
+        csv.required.set(false)
+    }
+
+    val excludes =
+        listOf(
+            // Android / Kotlin generated
+            "**/R.class",
+            "**/R\$*.class",
+            "**/BuildConfig.*",
+            "**/Manifest*.*",
+            "**/*Test*.*",
+            "android/**/*.*",
+            // Kotlin-generated
+            "**/*\$\$serializer.*",
+            "**/*\$Companion.*",
+            "**/*\$WhenMappings.*",
+            // Room-generated database glue
+            "**/queue/EventQueueDatabase_Impl*",
+            "**/queue/QueuedEventDao_Impl*",
+        )
+
+    val kotlinClasses =
+        fileTree("${layout.buildDirectory.get()}/tmp/kotlin-classes/debug") {
+            exclude(excludes)
+        }
+
+    classDirectories.setFrom(kotlinClasses)
+    sourceDirectories.setFrom(files("src/main/kotlin"))
+    executionData.setFrom(
+        fileTree(layout.buildDirectory.get()) {
+            include("jacoco/testDebugUnitTest.exec", "outputs/unit_test_code_coverage/debugUnitTest/*.exec")
+        },
+    )
+}
+
+tasks.withType<Test>().configureEach {
+    extensions.configure<JacocoTaskExtension> {
+        isIncludeNoLocationClasses = true
+        excludes = listOf("jdk.internal.*")
+    }
+}
+
+android {
+    buildTypes {
+        named("debug") {
+            enableUnitTestCoverage = true
         }
     }
 }

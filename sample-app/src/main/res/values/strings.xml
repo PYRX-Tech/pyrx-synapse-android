@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  sample-app/strings.xml
+
+  All user-facing strings extracted so Compose previews compile cleanly and
+  so the sample doubles as a (tiny) localisation reference. Strings prefixed
+  with `demo_` are the labels QA reads off the screen when verifying flows.
+-->
+<resources>
+    <string name="app_name">PYRX Synapse Sample</string>
+
+    <!-- Top-level navigation -->
+    <string name="nav_identity">Identity</string>
+    <string name="nav_events">Events</string>
+    <string name="nav_push">Push</string>
+    <string name="nav_debug">Debug</string>
+    <string name="nav_privacy">Privacy</string>
+
+    <!-- Identity screen -->
+    <string name="identity_title">Identity</string>
+    <string name="identity_hint_external_id">External ID (e.g. user_42)</string>
+    <string name="identity_action_identify">Identify</string>
+    <string name="identity_action_alias">Alias</string>
+    <string name="identity_action_logout">Logout</string>
+    <string name="identity_current_label">Current external ID:</string>
+    <string name="identity_none">(none — anonymous)</string>
+
+    <!-- Events screen -->
+    <string name="events_title">Events</string>
+    <string name="events_action_track">Track</string>
+    <string name="events_action_screen">Screen</string>
+    <string name="events_hint_event_name">Event name (e.g. purchase_completed)</string>
+    <string name="events_hint_property_key">Property key</string>
+    <string name="events_hint_property_value">Property value</string>
+
+    <!-- Push screen -->
+    <string name="push_title">Push</string>
+    <string name="push_action_request_permission">Request notification permission</string>
+    <string name="push_action_show_token">Fetch FCM token</string>
+    <string name="push_permission_label">Permission:</string>
+    <string name="push_token_label">FCM token:</string>
+    <string name="push_token_placeholder">(tap “Fetch FCM token” to show)</string>
+
+    <!-- Debug screen -->
+    <string name="debug_title">Debug info</string>
+    <string name="debug_action_refresh">Refresh</string>
+
+    <!-- Privacy screen -->
+    <string name="privacy_title">Privacy</string>
+    <string name="privacy_tracking_enabled">Tracking enabled</string>
+    <string name="privacy_action_delete_user">Delete user (GDPR)</string>
+    <string name="privacy_delete_confirm_title">Delete user data?</string>
+    <string name="privacy_delete_confirm_body">
+        This will wipe ALL local SDK data (identifiers, queued events,
+        push token) AND request server-side deletion. This action cannot
+        be undone.
+    </string>
+    <string name="privacy_action_confirm">Delete</string>
+    <string name="privacy_action_cancel">Cancel</string>
+</resources>
