@@ -25,6 +25,7 @@ plugins {
     alias(libs.plugins.android.library)
     alias(libs.plugins.kotlin.android)
     `maven-publish`
+    signing
     jacoco
 }
 
@@ -213,6 +214,16 @@ afterEvaluate {
                     }
                 }
             }
+        }
+    }
+
+    // GPG signing — required by Maven Central. See synapse-core for full rationale.
+    signing {
+        val signingKey = providers.environmentVariable("GPG_PRIVATE_KEY").orNull
+        val signingPwd = providers.environmentVariable("GPG_PASSPHRASE").orNull
+        if (!signingKey.isNullOrBlank() && !signingPwd.isNullOrBlank()) {
+            useInMemoryPgpKeys(signingKey, signingPwd)
+            sign(publishing.publications["release"])
         }
     }
 }

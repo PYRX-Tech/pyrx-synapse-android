@@ -10,6 +10,29 @@ plugins {
     alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.ktlint) apply false
     alias(libs.plugins.detekt) apply false
+    // NMCP aggregation — collects publications from synapse-core + synapse-push +
+    // synapse-inapp and uploads as a single bundle to Sonatype Central Portal.
+    // Requires CENTRAL_USERNAME + CENTRAL_PASSWORD env vars at publish time;
+    // signing keys (GPG_PRIVATE_KEY + GPG_PASSPHRASE) wired per-module.
+    alias(libs.plugins.nmcp)
+}
+
+// Aggregate every SDK module publication into one Central Portal upload.
+// Applied at the root project; nmcp's aggregation API walks subprojects
+// looking for "release" MavenPublications. synapse-inapp is intentionally
+// excluded (its publication block is commented out for v0.1.0).
+nmcp {
+    publishAllProjectsProbablyBreakingProjectIsolation {
+        // Central Portal credentials sourced from env (CI provides them via
+        // GH Actions secrets; locally they come from gradle.properties or
+        // shell env).
+        username = providers.environmentVariable("CENTRAL_USERNAME")
+        password = providers.environmentVariable("CENTRAL_PASSWORD")
+        // USER_MANAGED requires manual "Publish" click in the Central Portal
+        // dashboard after upload — safe default for first v0.1.0 dry-run.
+        // Flip to AUTOMATIC after the first verified release.
+        publicationType = "USER_MANAGED"
+    }
 }
 
 // Apply ktlint + detekt to every subproject that has Kotlin sources so the

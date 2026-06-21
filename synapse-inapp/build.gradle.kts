@@ -56,15 +56,14 @@ tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile>().configureEach 
     }
 }
 
-afterEvaluate {
-    publishing {
-        publications {
-            create<MavenPublication>("release") {
-                from(components["release"])
-                groupId = "tech.pyrx.synapse"
-                artifactId = "synapse-inapp"
-                version = project.version.toString()
-            }
-        }
-    }
-}
+// Maven publication intentionally NOT configured for v0.1.0 — the module is
+// an empty Phase-8.4b scaffold (in-app messaging arrives in Phase 9) and would
+// publish a misleading 0.1.0 placeholder to Maven Central. Until Phase 9 lands
+// the implementation + completes the POM, NMCP aggregation simply skips this
+// module (no MavenPublication created → nothing to aggregate → no publish).
+//
+// Phase 9 reactivation checklist:
+//   1. Restore the afterEvaluate publishing { } block (copy from synapse-core)
+//   2. Add full POM metadata (name, description, url, license, developers, scm)
+//   3. Add the same `signing { useInMemoryPgpKeys + sign(publications) }` block
+//   4. Bump version in lockstep with synapse-core / synapse-push

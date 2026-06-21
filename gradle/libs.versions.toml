@@ -10,6 +10,13 @@ ktlint = "12.1.0"
 detekt = "1.23.6"
 ksp = "1.9.22-1.0.17"
 
+# Publishing — Sonatype Central Portal via NMCP (Phase 8.4b post-release wiring).
+# NMCP (NexusMavenCentralPublish) is the GradleUp-maintained plugin for the
+# new Sonatype Central Publisher API. Replaces the legacy `gradle-nexus-publish`
+# plugin (which targets s01.oss.sonatype.org). Aggregation across modules is
+# a feature of the single `com.gradleup.nmcp` plugin (no separate ID).
+nmcp = "0.0.9"
+
 # AndroidX
 androidx-security-crypto = "1.1.0-alpha06"
 androidx-annotation = "1.7.1"
@@ -100,3 +107,4 @@ kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", versi
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
+nmcp = { id = "com.gradleup.nmcp", version.ref = "nmcp" }
