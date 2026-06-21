@@ -21,8 +21,12 @@
  *   - alias(newExternalId)         — explicit anonymous → known merge
  *   - logout()                     — client-side identity clear
  *
- * Subsequent PRs (events, push, attribution) extend this object in place
- * rather than introducing new top-level entry points.
+ * PR 3 surface (Events + Offline Queue):
+ *   - track(eventName, properties)  — enqueue a custom event; flush async
+ *   - screen(screenName, properties) — enqueue a `$screen` event; flush async
+ *
+ * Subsequent PRs (push, attribution) extend this object in place rather than
+ * introducing new top-level entry points.
  *
  * Mirrors iOS `Pyrx` actor surface — every public method name + semantics
  * align so cross-platform docs can use one phrasing.
@@ -31,8 +35,10 @@
 package tech.pyrx.synapse
 
 import android.content.Context
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import tech.pyrx.synapse.events.EventsManager
 import tech.pyrx.synapse.identity.IdentityManager
 import tech.pyrx.synapse.identity.IdentityResult
 import tech.pyrx.synapse.network.HTTPClient
@@ -40,6 +46,11 @@ import tech.pyrx.synapse.network.HTTPSession
 import tech.pyrx.synapse.network.JSONValue
 import tech.pyrx.synapse.network.OkHttpSession
 import tech.pyrx.synapse.network.WireEnvironment
+import tech.pyrx.synapse.queue.EventQueue
+import tech.pyrx.synapse.queue.EventQueueDatabase
+import tech.pyrx.synapse.queue.NetworkCallbackReachability
+import tech.pyrx.synapse.queue.QueuedEventDao
+import tech.pyrx.synapse.queue.Reachability
 import tech.pyrx.synapse.storage.EncryptedStore
 import tech.pyrx.synapse.storage.PyrxStorage
 import tech.pyrx.synapse.storage.PyrxStorageKey
@@ -65,6 +76,15 @@ public object Pyrx {
 
     @Volatile
     private var identityManager: IdentityManager? = null
+
+    @Volatile
+    private var eventQueue: EventQueue? = null
+
+    @Volatile
+    private var eventsManager: EventsManager? = null
+
+    @Volatile
+    private var reachability: Reachability? = null
 
     // MARK: - Public API
 
@@ -95,14 +115,18 @@ public object Pyrx {
             config = config,
             storageOverride = null,
             sessionOverride = null,
+            daoOverride = null,
+            reachabilityOverride = null,
         )
     }
 
     /**
      * Test seam. Production callers always use the two-argument overload.
-     * Allows the unit tests to inject an
-     * [tech.pyrx.synapse.storage.InMemoryStorage] and / or a `MockHTTPSession`
-     * without touching the real Keystore / real network.
+     * Allows the unit tests to inject:
+     *   - an [tech.pyrx.synapse.storage.InMemoryStorage] (skip Keystore)
+     *   - a `MockHTTPSession` (skip network)
+     *   - a Room in-memory [QueuedEventDao] (skip on-disk SQLite)
+     *   - a hand-rolled [Reachability] (skip ConnectivityManager)
      */
     @Throws(PyrxError::class)
     internal suspend fun initialize(
@@ -110,6 +134,8 @@ public object Pyrx {
         config: PyrxConfig,
         storageOverride: PyrxStorage?,
         sessionOverride: HTTPSession?,
+        daoOverride: QueuedEventDao?,
+        reachabilityOverride: Reachability?,
     ) {
         initMutex.withLock {
             val existing = this.config
@@ -140,16 +166,48 @@ public object Pyrx {
                     logger = logger,
                 )
 
+            // PR 3 — events + offline queue. Build the DAO (real Room db or
+            // injected in-memory for tests), then the EventQueue and
+            // EventsManager. Drain triggers wire up here:
+            //   - reachability flips to SATISFIED → drain
+            //   - this initialize() call itself → one drain so cold-start
+            //     flushes events left over from a previous app session
+            val dao = daoOverride ?: EventQueueDatabase.create(context.applicationContext).queuedEventDao()
+            val queue =
+                EventQueue(
+                    httpClient = client,
+                    dao = dao,
+                    maxQueueSize = config.maxQueueSize,
+                    logger = logger,
+                )
+            val events =
+                EventsManager(
+                    queue = queue,
+                    storage = store,
+                    anonymousId = anon,
+                    logger = logger,
+                )
+            val reach = reachabilityOverride ?: NetworkCallbackReachability(context.applicationContext)
+            queue.bindReachability(reach)
+
             this.config = config
             this.storage = store
             this.anonymousId = anon
             this.httpClient = client
             this.identityManager = identity
+            this.eventQueue = queue
+            this.eventsManager = events
+            this.reachability = reach
 
             logger.info {
                 "Initialized PYRXSynapse v${PyrxConstants.SDK_VERSION} " +
                     "(workspace=${config.workspaceId}, env=${config.environment})"
             }
+
+            // Kick a drain so events persisted in a previous session get a
+            // shot at flushing immediately. Fire-and-forget — we do not
+            // block initialize() on network I/O.
+            queue.drainNow()
         }
     }
 
@@ -251,6 +309,64 @@ public object Pyrx {
         manager.logout()
     }
 
+    // MARK: - Events API (PR 3)
+
+    /**
+     * Track a custom event. Enqueues to the on-disk offline queue and
+     * triggers an asynchronous flush. Returns once the event is durably in
+     * the queue (Room insert + bound enforcement) — network success/failure
+     * is handled asynchronously by the drain loop.
+     *
+     * Wire shape:
+     *   POST /v1/events
+     *   {
+     *     "external_id":     <user externalId, or device anonymousId>,
+     *     "event_name":      <eventName>,
+     *     "attributes":      <properties>,
+     *     "idempotency_key": <SDK-generated UUID>,
+     *     "occurred_at":     <ISO-8601 UTC>
+     *   }
+     *
+     * @param eventName Caller-supplied event name. Trimmed; must not be
+     *                  blank after trimming.
+     * @param properties Optional caller-supplied attributes. Maps onto the
+     *                   wire `attributes` field.
+     * @throws PyrxError.NotInitialized if [initialize] has not completed.
+     * @throws PyrxError.InvalidConfig on blank eventName.
+     * @throws PyrxError.StorageFailure on storage read failure.
+     */
+    @Throws(PyrxError::class)
+    public suspend fun track(
+        eventName: String,
+        properties: Map<String, JSONValue>? = null,
+    ) {
+        val manager = eventsManager ?: throw PyrxError.NotInitialized
+        manager.track(eventName = eventName, properties = properties)
+    }
+
+    /**
+     * Track a screen view. Wire shape uses the canonical event name
+     * `"$screen"` with `attributes.screen_name = screenName`. Mirrors iOS
+     * + browser SDK so cross-platform analytics consumers can split on
+     * `event_name == "$screen"` regardless of source platform.
+     *
+     * @param screenName Human-readable screen identifier. Trimmed; must not
+     *                   be blank after trimming.
+     * @param properties Optional caller-supplied attributes. Merged with
+     *                   `screen_name` (SDK-stamped value wins on conflict).
+     * @throws PyrxError.NotInitialized if [initialize] has not completed.
+     * @throws PyrxError.InvalidConfig on blank screenName.
+     * @throws PyrxError.StorageFailure on storage read failure.
+     */
+    @Throws(PyrxError::class)
+    public suspend fun screen(
+        screenName: String,
+        properties: Map<String, JSONValue>? = null,
+    ) {
+        val manager = eventsManager ?: throw PyrxError.NotInitialized
+        manager.screen(screenName = screenName, properties = properties)
+    }
+
     // MARK: - Internal seam for tests
 
     /**
@@ -259,11 +375,22 @@ public object Pyrx {
      * "uninitialize" the SDK.
      */
     internal fun resetForTesting() {
+        // Tear down background jobs first so the launched drain coroutines
+        // can't outlive the reset. shutdown() is a suspend function; we
+        // bridge through runBlocking only in the test path — production
+        // never calls this method.
+        eventQueue?.let { queue ->
+            runCatching { runBlocking { queue.shutdown() } }
+        }
+        reachability?.stop()
         config = null
         storage = null
         anonymousId = null
         httpClient = null
         identityManager = null
+        eventQueue = null
+        eventsManager = null
+        reachability = null
         logger.setLevel(LogLevel.INFO)
     }
 
