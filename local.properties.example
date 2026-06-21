@@ -1,0 +1,7 @@
+# local.properties.example
+#
+# Copy to `local.properties` (gitignored) and edit `sdk.dir` to point at your
+# Android SDK installation. Android Studio writes this file automatically the
+# first time you open the project; on a headless box you write it by hand.
+
+sdk.dir=/Users/your-username/Library/Android/sdk

@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  synapse-inapp library manifest. In-app surface lands in Phase 9.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" />
