@@ -153,6 +153,31 @@ internal class EventQueue(
      */
     private var reachabilityJob: Job? = null
 
+    /**
+     * Privacy kill switch (Phase 8.4b Task 8.4b.10). When `false`, [enqueue]
+     * still persists events to disk (so the SDK preserves user intent through
+     * a disable→re-enable cycle) but the drain loop refuses to send anything
+     * until tracking is re-enabled. Toggled exclusively by
+     * `PrivacyManager.setTrackingEnabled(_:)`.
+     *
+     * @Volatile because the drain coroutine reads this on every loop entry
+     * while the privacy actor mutates it from a different coroutine context.
+     */
+    @Volatile
+    private var trackingEnabled: Boolean = true
+
+    /**
+     * Wall-clock timestamp (millis-since-epoch) of the most recent drain pass.
+     * Updated on entry to [drainLoop] — even a no-op pass (tracking disabled)
+     * leaves a trace so diagnostics can show the SDK is alive and the gating
+     * decision is fresh.
+     *
+     * Surfaced via [debugLastDrainAt] / [PyrxDebugInfo.lastDrainAt]. Mirrors
+     * iOS `EventQueue.lastDrainAt`.
+     */
+    @Volatile
+    private var lastDrainAt: Long? = null
+
     // MARK: - Public API
 
     /**
@@ -225,6 +250,60 @@ internal class EventQueue(
      */
     suspend fun count(): Int = dao.count()
 
+    /**
+     * Snapshot of the on-disk queue depth for diagnostics. Same value as
+     * [count] but the spelling matches the public [tech.pyrx.synapse
+     * .PyrxDebugInfo.eventQueueDepth] field so the call site reads
+     * naturally. Mirrors iOS `EventQueue.debugQueueDepth`.
+     */
+    suspend fun debugQueueDepth(): Int = dao.count()
+
+    /**
+     * Snapshot of the most-recent drain timestamp (millis-since-epoch) for
+     * diagnostics. Returns `null` until the queue has attempted to flush at
+     * least once. Mirrors iOS `EventQueue.debugLastDrainAt`.
+     */
+    fun debugLastDrainAt(): Long? = lastDrainAt
+
+    /**
+     * Read the privacy gate. Used by diagnostics — `PrivacyManager` holds
+     * its own copy as the source of truth, but the queue's copy is what
+     * the drain loop actually consults, so we expose it for parity.
+     * Mirrors iOS `EventQueue.debugTrackingEnabled`.
+     */
+    fun debugTrackingEnabled(): Boolean = trackingEnabled
+
+    /**
+     * Flip the privacy kill switch. When `enabled == false`:
+     *   - The drain loop refuses to send anything (returns immediately on
+     *     entry).
+     *   - [enqueue] still persists events so they flush on re-enable.
+     *
+     * Idempotent — setting the same value twice is a no-op. Called by
+     * `PrivacyManager.setTrackingEnabled`; never by host apps directly.
+     */
+    fun setTrackingEnabled(enabled: Boolean) {
+        trackingEnabled = enabled
+    }
+
+    /**
+     * GDPR cascade — drop every persisted event without sending. Called by
+     * `PrivacyManager.deleteUser`. Idempotent; safe to call on an
+     * already-empty queue.
+     *
+     * Cancels any in-flight drain so a concurrent post cannot reinstate a
+     * row that the wipe was about to delete. Mirrors iOS `EventQueue.wipe`.
+     */
+    suspend fun wipe() {
+        mutex.withLock {
+            drainJob?.cancel()
+            drainJob = null
+            consecutiveFailures = 0
+        }
+        dao.deleteAll()
+        logger.info { "EventQueue: wiped on privacy request." }
+    }
+
     // MARK: - Private — drain loop
 
     /**
@@ -254,6 +333,19 @@ internal class EventQueue(
      */
     @Suppress("LoopWithTooManyJumpStatements")
     private suspend fun drainLoop() {
+        // Stamp every drain entry — even a no-op pass — so diagnostics can
+        // show the SDK is alive and the gating decision is fresh.
+        lastDrainAt = System.currentTimeMillis()
+
+        // Privacy gate (Phase 8.4b Task 8.4b.10). When tracking is disabled
+        // we still hold queued events on disk — but we refuse to send them
+        // until the user re-opts-in. `PrivacyManager.setTrackingEnabled(true)`
+        // explicitly calls `drainNow()` to kick this loop back into life.
+        if (!trackingEnabled) {
+            logger.debug { "EventQueue: drain skipped — tracking disabled (count=${dao.count()})." }
+            return
+        }
+
         var iterations = 0
         var retriesThisPass = 0
 

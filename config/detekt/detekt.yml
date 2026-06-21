@@ -15,9 +15,11 @@ complexity:
     # (identify, alias, logout, track, screen, handleDeviceToken,
     # handleNotificationTap, handleActionButton, handleRegistrationError,
     # installPushBridge, pushHooks, debugInfo, setLogLevel, etc.) plus the
-    # private helpers that back them. Bumped to 25 to accommodate PR 4's
-    # push surface; any growth past that should re-examine grouping.
-    thresholdInObjects: 25
+    # private helpers that back them. Bumped to 25 for PR 4's push surface;
+    # bumped to 35 for PR 5's privacy + cold-start attribution surface
+    # (setTrackingEnabled, deleteUser, recordColdStartLaunch + their private
+    # helpers). Any growth past that should seriously re-examine grouping.
+    thresholdInObjects: 35
   LongParameterList:
     active: true
     functionThreshold: 7
