@@ -40,18 +40,27 @@ jobs:
         run: ./gradlew --no-daemon ktlintCheck detekt
 
   publish:
-    name: Publish to Sonatype OSSRH
+    name: Publish to Sonatype Central Portal (NMCP aggregation)
     needs: verify
     runs-on: ubuntu-latest
-    # Skip entirely if any required publish secret is unset — keeps PR 1
-    # safe to merge before secrets are provisioned in PR 7.
+    # Skip when MAVEN_PUBLISH_ENABLED variable is false/unset — keeps
+    # accidental tag pushes from publishing before secrets are visible.
     if: >-
       ${{ vars.MAVEN_PUBLISH_ENABLED == 'true' }}
     env:
-      ORG_GRADLE_PROJECT_sonatypeUsername: ${{ secrets.SONATYPE_USERNAME }}
-      ORG_GRADLE_PROJECT_sonatypePassword: ${{ secrets.SONATYPE_PASSWORD }}
-      ORG_GRADLE_PROJECT_signingKey: ${{ secrets.MAVEN_SIGNING_KEY }}
-      ORG_GRADLE_PROJECT_signingPassword: ${{ secrets.MAVEN_SIGNING_PASSWORD }}
+      # Secret names aligned with PYRX-Tech/pyrx-synapse-java (live since 2026-05-02).
+      # The 4 secrets are recommended as PYRX-Tech org-level secrets so this
+      # workflow + the Java SDK workflow + any future JVM SDK repo share one
+      # source of truth.
+      #
+      # NMCP plugin reads CENTRAL_USERNAME + CENTRAL_PASSWORD from process env
+      # (configured in root build.gradle.kts nmcpAggregation { centralPortal { ... } }).
+      # Signing plugin reads GPG_PRIVATE_KEY + GPG_PASSPHRASE the same way
+      # (configured per-module in synapse-core / synapse-push build.gradle.kts).
+      CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
+      CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
+      GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+      GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
     steps:
       - uses: actions/checkout@v4
 
@@ -69,14 +78,15 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      # Sonatype Central publish — wired in PR 7 when we add the signing
-      # plugin + nexus-publish plugin configuration. The command below is
-      # the placeholder shape; the actual task names land with PR 7.
-      - name: Publish release artifacts
-        run: |
-          ./gradlew --no-daemon \
-            publishReleasePublicationToSonatypeRepository \
-            closeAndReleaseSonatypeStagingRepository
+      # NMCP aggregation publishes synapse-core + synapse-push (synapse-inapp
+      # is excluded by design — Phase 9 reactivates it). The task uploads a
+      # single bundle ZIP to https://central.sonatype.com/api/v1/publisher/.
+      # With publishingType = "USER_MANAGED" the deployment requires a manual
+      # "Publish" click in the Central Portal dashboard after upload — safe
+      # for first v0.1.0 dry-run. Flip to AUTOMATIC in root build.gradle.kts
+      # after the first verified release.
+      - name: Publish aggregated bundle to Central Portal
+        run: ./gradlew --no-daemon publishAggregatedPublicationToCentralPortal
 
   github-release:
     name: Create GitHub Release

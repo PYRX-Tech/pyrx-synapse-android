@@ -10,6 +10,7 @@ plugins {
     alias(libs.plugins.kotlin.serialization)
     alias(libs.plugins.ksp)
     `maven-publish`
+    signing
     jacoco
 }
 
@@ -237,6 +238,18 @@ afterEvaluate {
                     }
                 }
             }
+        }
+    }
+
+    // GPG signing — required by Maven Central. In-memory key from env vars
+    // (CI provides them via GH Actions secrets; locally signing is skipped
+    // when GPG_PRIVATE_KEY/GPG_PASSPHRASE are absent so dev builds stay fast).
+    signing {
+        val signingKey = providers.environmentVariable("GPG_PRIVATE_KEY").orNull
+        val signingPwd = providers.environmentVariable("GPG_PASSPHRASE").orNull
+        if (!signingKey.isNullOrBlank() && !signingPwd.isNullOrBlank()) {
+            useInMemoryPgpKeys(signingKey, signingPwd)
+            sign(publishing.publications["release"])
         }
     }
 }

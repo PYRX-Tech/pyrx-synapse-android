@@ -12,18 +12,19 @@ The pipeline is driven by `.github/workflows/publish.yml`, triggered on push of 
 
 These items must be in place before the very first release. They do not need to be repeated for subsequent releases unless something rotates.
 
-### Sonatype OSSRH account + DNS verification
+### Sonatype Central Portal account + namespace verification
 
-Sonatype OSSRH (Open Source Software Repository Hosting) is the staging service that publishes to Maven Central. Our group ID is `tech.pyrx.synapse`.
+> **Status (2026-06-21)**: namespace `tech.pyrx` is already registered + verified for the PYRX-Tech organization (set up when `pyrx-synapse-java` was published, May 2026). New SDK repos under this namespace inherit the verification — no extra DNS work needed.
 
-1. **Create an OSSRH account** at [issues.sonatype.org](https://issues.sonatype.org/) (Jira-based).
-2. **File a "New Project" ticket** requesting the `tech.pyrx.synapse` group ID.
-3. **Verify DNS ownership** of `pyrx.tech` — Sonatype provides a TXT record value; add it to your `pyrx.tech` DNS as a `TXT` record and reply to the ticket once it propagates.
-4. **Wait for approval** — Sonatype reviews tickets manually. Lead time is typically **3-5 business days**. Start this in parallel with PR 7 of the SDK release prep so the credentials are ready when you're ready to tag.
+Sonatype migrated from legacy OSSRH (Jira tickets, `s01.oss.sonatype.org`) to the [Central Portal](https://central.sonatype.com/) during 2026. This SDK publishes via the Central Portal API using the **NMCP** Gradle plugin (`com.gradleup.nmcp.aggregation`, root `build.gradle.kts`).
 
-After approval, your OSSRH username + password (the Jira credentials, not Google SSO) can publish to the staging repository.
+If you're starting a fresh setup for a new namespace, the modern process at <https://central.sonatype.com/> is self-service (no Jira tickets):
+1. Log in (GitHub OAuth recommended).
+2. **Add namespace** under "Namespaces" tab.
+3. Choose **DNS TXT verification** — Sonatype shows a key; add as TXT record on the verifiable domain; click "Verify" once `dig +short TXT <domain>` shows the value.
+4. Approval is usually instant after DNS verification (vs the legacy 3-5 business-day Jira flow).
 
-> Sonatype is migrating from "OSSRH" (s01.oss.sonatype.org) to "Central Portal" during 2026. Verify the current state at [central.sonatype.org](https://central.sonatype.org/) when provisioning — the GitHub Actions workflow in `publish.yml` uses the canonical Gradle task names (`publishReleasePublicationToSonatypeRepository` / `closeAndReleaseSonatypeStagingRepository`) that work on both endpoints.
+For the **PYRX-Tech** setup specifically, this is already done — skip to "GPG signing key".
 
 ### GPG signing key
 
@@ -52,14 +53,18 @@ Maven Central requires every artifact to be GPG-signed.
 
 ### GitHub repository secrets
 
-Add four secrets to `PYRX-Tech/pyrx-synapse-android` repository settings (**Settings → Secrets and variables → Actions → New repository secret**):
+Four secrets are required. **Recommended path:** promote them to **PYRX-Tech org-level secrets** (**GitHub Org settings → Secrets and variables → Actions → New organization secret**, visibility = "Public repositories" or "Selected repositories" including `pyrx-synapse-{ios,android,java,...}`). This avoids per-repo duplication when future SDK repos (Web Push, React Native, Flutter — Phase 9) need the same credentials.
+
+**Alternative:** add as `PYRX-Tech/pyrx-synapse-android` repository secrets (**Settings → Secrets and variables → Actions → New repository secret**). Per-repo, works the same way.
+
+The secret names match `PYRX-Tech/pyrx-synapse-java` (live since 2026-05-02) so one source of truth serves both:
 
 | Secret | Value |
 |---|---|
-| `SONATYPE_USERNAME` | Your Sonatype OSSRH / Central Portal username. |
-| `SONATYPE_PASSWORD` | The corresponding password (or token, if using Central Portal). |
-| `MAVEN_SIGNING_KEY` | The full contents of `maven-signing-key.asc` (the ASCII-armored private key). |
-| `MAVEN_SIGNING_PASSWORD` | The passphrase you chose when generating the GPG key. |
+| `CENTRAL_USERNAME` | Your Sonatype Central Portal user token name (Account → "View User Tokens" → "Generate User Token"). |
+| `CENTRAL_PASSWORD` | The corresponding user token password (same screen). |
+| `GPG_PRIVATE_KEY` | The full contents of the ASCII-armored private key (`gpg --armor --export-secret-keys <KEY_ID>`). |
+| `GPG_PASSPHRASE` | The passphrase you chose when generating the GPG key. |
 
 Also create a repository **variable** named `MAVEN_PUBLISH_ENABLED` with value `true` (the publish job is gated on this flag so accidentally-pushed tags don't publish before secrets are wired).
 
@@ -133,7 +138,7 @@ git push origin v1.0.0
 Open the Actions tab on GitHub. The `Publish to Maven Central` workflow runs three jobs:
 
 1. **verify** — `./gradlew assembleRelease`, `./gradlew test`, `./gradlew ktlintCheck detekt`. All must pass before the next two jobs run.
-2. **publish** — `./gradlew publishReleasePublicationToSonatypeRepository closeAndReleaseSonatypeStagingRepository`. Gated on `vars.MAVEN_PUBLISH_ENABLED == 'true'` and the four signing/credential secrets being set.
+2. **publish** — `./gradlew publishAggregatedPublicationToCentralPortal` (NMCP aggregation task). Gated on `vars.MAVEN_PUBLISH_ENABLED == 'true'` and the four signing/credential secrets being readable (org-level or repo-level). With NMCP's `publicationType = "USER_MANAGED"` (the default in `build.gradle.kts`), the deployment is uploaded but NOT released — you must visit <https://central.sonatype.com/publishing/deployments> and click "Publish" to release to Maven Central. Flip to `AUTOMATIC` after the first verified release if you want one-click publishes.
 3. **github-release** — creates a GitHub Release on the tag with auto-generated release notes.
 
 If any job fails:
