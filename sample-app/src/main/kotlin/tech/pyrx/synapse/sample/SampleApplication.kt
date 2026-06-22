@@ -43,6 +43,7 @@ import tech.pyrx.synapse.Pyrx
 import tech.pyrx.synapse.PyrxConfig
 import tech.pyrx.synapse.PyrxEnvironment
 import tech.pyrx.synapse.push.PyrxPush
+import tech.pyrx.synapse.sample.BuildConfig
 import java.util.UUID
 
 public class SampleApplication : Application() {
@@ -80,22 +81,21 @@ public class SampleApplication : Application() {
         private const val TAG: String = "PYRXSynapseSample"
 
         // ===========================================================
-        // Placeholder credentials — REPLACE BEFORE RUNNING AGAINST PROD
+        // Config sourced from BuildConfig (sample-app/build.gradle.kts)
         // ===========================================================
-        // Generated UUIDv4; not a real workspace. The events POST will be
-        // rejected by the backend until the host-app developer fills in
-        // their own workspace UUID (Settings → Developers → API keys).
+        // The PYRX_* constants are baked into BuildConfig at compile time
+        // from gradle properties. Default values (in build.gradle.kts) are
+        // production-pointing safe placeholders. Override by adding to
+        // local.properties (gitignored):
+        //
+        //     pyrx.workspaceId = <UUID from /settings/workspace>
+        //     pyrx.apiKey      = psk_test_<32-hex from /settings/api-keys>
+        //     pyrx.baseUrl     = https://dev.synapse-events.pyrx.tech
+        //
+        // See sample-app/README.md "Local push notification testing".
         private val SAMPLE_WORKSPACE_ID: UUID =
-            UUID.fromString("00000000-0000-0000-0000-000000000000")
-
-        // Placeholder API key. Format matches `psk_{env}_{32-hex}` so the
-        // SDK passes config validation without any code edits — but the
-        // backend will reject the value at the first event POST.
-        private const val SAMPLE_API_KEY: String =
-            "psk_test_00000000000000000000000000000000"
-
-        // Default Synapse events endpoint. Swap to a staging URL if the
-        // host-app developer is testing against a non-prod environment.
-        private const val SAMPLE_BASE_URL: String = "https://synapse-events.pyrx.tech"
+            UUID.fromString(BuildConfig.PYRX_WORKSPACE_ID)
+        private val SAMPLE_API_KEY: String = BuildConfig.PYRX_API_KEY
+        private val SAMPLE_BASE_URL: String = BuildConfig.PYRX_BASE_URL
     }
 }

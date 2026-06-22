@@ -32,13 +32,36 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "0.1.0"
+
+        // PYRX SDK config — read from `local.properties` or the host-app
+        // developer's shell environment (Gradle's `providers.gradleProperty`
+        // covers both). Defaults wired to production safely; override in
+        // local.properties for dev tunnel testing:
+        //
+        //     pyrx.workspaceId = <UUID from /settings/workspace>
+        //     pyrx.apiKey      = psk_test_<32-hex from /settings/api-keys>
+        //     pyrx.baseUrl     = https://dev.synapse-events.pyrx.tech
+        //
+        // See sample-app/README.md "Local push notification testing" for
+        // the full flow (Cloudflare Tunnel + credential upload + test send).
+        val pyrxWorkspaceId = providers.gradleProperty("pyrx.workspaceId")
+            .getOrElse("00000000-0000-0000-0000-000000000000")
+        val pyrxApiKey = providers.gradleProperty("pyrx.apiKey")
+            .getOrElse("psk_test_00000000000000000000000000000000")
+        val pyrxBaseUrl = providers.gradleProperty("pyrx.baseUrl")
+            .getOrElse("https://synapse-events.pyrx.tech")
+
+        buildConfigField("String", "PYRX_WORKSPACE_ID", "\"$pyrxWorkspaceId\"")
+        buildConfigField("String", "PYRX_API_KEY", "\"$pyrxApiKey\"")
+        buildConfigField("String", "PYRX_BASE_URL", "\"$pyrxBaseUrl\"")
     }
 
     buildFeatures {
         compose = true
-        // No BuildConfig generation — the sample reads config from
-        // `local.properties` overrides only (see SampleApplication.kt).
-        buildConfig = false
+        // BuildConfig enabled so SampleApplication.kt reads PYRX_* values
+        // from local.properties / gradle.properties with safe production
+        // defaults baked in (see defaultConfig.buildConfigField calls above).
+        buildConfig = true
     }
 
     composeOptions {
