@@ -91,21 +91,33 @@ All three must pass.
 
 ### 2. Update version metadata
 
-Bump the version in `gradle/libs.versions.toml` (or whichever single source you've established):
+**Recommended:** use the bump script. One command updates all 7 lockstep version references AND runs `./gradlew test` to confirm assertions still pass:
 
-```toml
-# gradle/libs.versions.toml
-[versions]
-synapse-sdk = "1.0.0"   # change to the new version
+```bash
+JAVA_HOME=$(/usr/libexec/java_home -v 17) ./scripts/bump-version.sh 1.0.0
 ```
 
-Also bump `PyrxConstants.SDK_VERSION` in `synapse-core/src/main/kotlin/tech/pyrx/synapse/PyrxConstants.kt`:
+The script updates:
+1. `build.gradle.kts` (root, `version = "..."`)
+2. `synapse-core/build.gradle.kts`
+3. `synapse-push/build.gradle.kts`
+4. `synapse-inapp/build.gradle.kts`
+5. `synapse-core/src/main/kotlin/tech/pyrx/synapse/PyrxConstants.kt` (`SDK_VERSION`)
+6. `synapse-core/src/test/kotlin/tech/pyrx/synapse/PyrxConfigTest.kt` (assertion)
+7. `synapse-push/src/test/kotlin/tech/pyrx/synapse/push/PushRegistrationTest.kt` (2 hardcoded JSON / assertEquals refs)
+
+This script exists because v0.1.x dry-runs caught lockstep drift twice — test assertions hardcoded the old version while source was bumped, causing the publish workflow's verify job to fail. v0.1.1 → v0.1.2 had to recover from this exact bug. Manual sed across 6 files is error-prone; one command beats six.
+
+**Manual alternative** (the bump script does this automatically; documented here for reference):
 
 ```kotlin
+// synapse-core/src/main/kotlin/tech/pyrx/synapse/PyrxConstants.kt
 public const val SDK_VERSION: String = "1.0.0"
 ```
 
-> The Gradle `version` and `SDK_VERSION` must stay in lockstep. Future work: automate this via a `buildSrc` script that reads `libs.versions.toml` and generates `PyrxConstants.SDK_VERSION` at build time.
+Plus the same `version = "1.0.0"` line in 4 build.gradle.kts files plus 3 test-assertion spots. See the script source for the exact sed expressions.
+
+> Future work: a Gradle `buildSrc` task that reads `libs.versions.toml` and generates `PyrxConstants.SDK_VERSION` at compile time would eliminate the need for any manual or scripted lockstep — single source of truth in `libs.versions.toml`. The bump script is a pragmatic stepping stone until that lands.
 
 ### 3. Update the CHANGELOG
 
