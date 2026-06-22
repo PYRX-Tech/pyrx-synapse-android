@@ -17,6 +17,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    alias(libs.plugins.gms.google.services)
 }
 
 android {
@@ -33,14 +34,23 @@ android {
         versionCode = 1
         versionName = "0.1.0"
 
-        // PYRX SDK config — read from `local.properties` or the host-app
-        // developer's shell environment (Gradle's `providers.gradleProperty`
-        // covers both). Defaults wired to production safely; override in
-        // local.properties for dev tunnel testing:
+        // PYRX SDK config — read from Gradle properties. ``providers.
+        // gradleProperty`` resolves against ``gradle.properties`` (project
+        // and user-global at ``~/.gradle/gradle.properties``), ``-P`` CLI
+        // overrides, and ``ORG_GRADLE_PROJECT_*`` env vars — NOT
+        // ``local.properties`` (that file is for ``sdk.dir`` and a small
+        // set of Android Gradle Plugin keys). Defaults are production-
+        // safe; override for dev tunnel testing in
+        // ``~/.gradle/gradle.properties`` (user-global, never committed):
         //
         //     pyrx.workspaceId = <UUID from /settings/workspace>
         //     pyrx.apiKey      = psk_test_<32-hex from /settings/api-keys>
-        //     pyrx.baseUrl     = https://dev.synapse-events.pyrx.tech
+        //     pyrx.baseUrl     = https://<first-level>.pyrx.tech
+        //
+        // ``baseUrl`` must be a FIRST-LEVEL ``*.pyrx.tech`` subdomain —
+        // Cloudflare Universal SSL does NOT cover second-level wildcards
+        // (e.g. ``dev.synapse-events.pyrx.tech``) so the TLS handshake
+        // fails. Use a hostname like ``synapse-dev.pyrx.tech`` instead.
         //
         // See sample-app/README.md "Local push notification testing" for
         // the full flow (Cloudflare Tunnel + credential upload + test send).
@@ -59,8 +69,9 @@ android {
     buildFeatures {
         compose = true
         // BuildConfig enabled so SampleApplication.kt reads PYRX_* values
-        // from local.properties / gradle.properties with safe production
-        // defaults baked in (see defaultConfig.buildConfigField calls above).
+        // from gradle.properties (project + user-global) with safe
+        // production defaults baked in (see defaultConfig.buildConfigField
+        // calls above).
         buildConfig = true
     }
 

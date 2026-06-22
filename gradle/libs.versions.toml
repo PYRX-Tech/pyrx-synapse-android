@@ -44,6 +44,11 @@ kotlinx-serialization = "1.6.3"
 # this single line; CI's deps lockfile update catches the rest.
 firebase-bom = "34.15.0"
 
+# google-services Gradle plugin — processes google-services.json into the
+# values resource that FirebaseInitProvider reads at app startup. Applied
+# only by host apps (sample-app); SDK library modules don't need it.
+google-services = "4.4.2"
+
 # Test
 junit = "4.13.2"
 mockk = "1.13.9"
@@ -108,3 +113,4 @@ ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
 detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
 nmcp = { id = "com.gradleup.nmcp", version.ref = "nmcp" }
+gms-google-services = { id = "com.google.gms.google-services", version.ref = "google-services" }

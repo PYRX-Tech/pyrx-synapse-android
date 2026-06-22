@@ -10,6 +10,9 @@ plugins {
     alias(libs.plugins.kotlin.android) apply false
     alias(libs.plugins.ktlint) apply false
     alias(libs.plugins.detekt) apply false
+    // google-services Gradle plugin — applied only by host apps (sample-app)
+    // to turn google-services.json into the Firebase init resource.
+    alias(libs.plugins.gms.google.services) apply false
     // NMCP aggregation — collects publications from synapse-core + synapse-push +
     // synapse-inapp and uploads as a single bundle to Sonatype Central Portal.
     // Requires CENTRAL_USERNAME + CENTRAL_PASSWORD env vars at publish time;

@@ -84,13 +84,16 @@ public class SampleApplication : Application() {
         // Config sourced from BuildConfig (sample-app/build.gradle.kts)
         // ===========================================================
         // The PYRX_* constants are baked into BuildConfig at compile time
-        // from gradle properties. Default values (in build.gradle.kts) are
-        // production-pointing safe placeholders. Override by adding to
-        // local.properties (gitignored):
+        // from Gradle properties (project ``gradle.properties`` or, for
+        // secrets like the API key, user-global ``~/.gradle/gradle.properties``
+        // — see the comment on ``providers.gradleProperty`` in
+        // sample-app/build.gradle.kts). Defaults are production-safe
+        // placeholders. Override for dev tunnel testing in
+        // ``~/.gradle/gradle.properties``:
         //
         //     pyrx.workspaceId = <UUID from /settings/workspace>
         //     pyrx.apiKey      = psk_test_<32-hex from /settings/api-keys>
-        //     pyrx.baseUrl     = https://dev.synapse-events.pyrx.tech
+        //     pyrx.baseUrl     = https://<first-level-subdomain>.pyrx.tech
         //
         // See sample-app/README.md "Local push notification testing".
         private val SAMPLE_WORKSPACE_ID: UUID =
