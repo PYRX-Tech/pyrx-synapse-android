@@ -85,26 +85,13 @@ configuration error until you wire up Firebase Cloud Messaging:
 4. Place it at `sample-app/google-services.json` (replacing the
    placeholder hint file `google-services.json.placeholder` — do NOT
    commit the real one).
-5. Apply the Google Services Gradle plugin in
-   `sample-app/build.gradle.kts`:
-
-   ```kotlin
-   plugins {
-       // existing plugins ...
-       id("com.google.gms.google-services")
-   }
-   ```
-
-   And add the classpath at the root `build.gradle.kts` if not already
-   present:
-
-   ```kotlin
-   buildscript {
-       dependencies {
-           classpath("com.google.gms:google-services:4.4.1")
-       }
-   }
-   ```
+5. **No further build wiring needed.** The
+   `com.google.gms.google-services` plugin is already pinned in
+   `gradle/libs.versions.toml`, declared `apply false` at the root
+   `build.gradle.kts`, and applied via
+   `alias(libs.plugins.gms.google.services)` in
+   `sample-app/build.gradle.kts`. Just drop in `google-services.json`
+   and rebuild.
 
 6. Rebuild. `PyrxMessagingService.onNewToken(...)` now delivers a real
    FCM token and `Pyrx.handleDeviceToken(...)` registers it with the

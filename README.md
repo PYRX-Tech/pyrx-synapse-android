@@ -147,7 +147,19 @@ A complete Jetpack Compose sample app lives at [`sample-app/`](sample-app) — e
 ./gradlew :sample-app:installDebug
 ```
 
-Edit `sample-app/src/main/kotlin/tech/pyrx/synapse/sample/SampleApplication.kt` to point at your own workspace.
+To point the sample app at your own workspace, put the credentials in
+`~/.gradle/gradle.properties` (user-global, never committed):
+
+```properties
+pyrx.workspaceId = <UUID from Synapse dashboard → /settings/workspace>
+pyrx.apiKey      = psk_test_<32-hex from /settings/api-keys>
+pyrx.baseUrl     = https://synapse-events.pyrx.tech
+```
+
+The sample-app build reads these via `providers.gradleProperty(...)`
+and bakes them into BuildConfig. See [`sample-app/README.md`](sample-app/README.md) for the
+full setup (including Firebase / `google-services.json` for push
+testing).
 
 ## Cross-platform consistency
 
