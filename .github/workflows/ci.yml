@@ -40,6 +40,21 @@ jobs:
           # Cache Gradle home + project caches; reuse across runs on the same branch.
           cache-read-only: ${{ github.ref != format('refs/heads/{0}', 'main') }}
 
+      # ── CI google-services.json stub ───────────────────────────────
+      # The sample-app applies ``com.google.gms.google-services`` (PR #14)
+      # whose ``processDebugGoogleServices`` task validates the file's
+      # schema before the build can compile. CI has no real Firebase
+      # project, so we copy a schema-valid but obviously-fake stub
+      # (``project_id: pyrx-synapse-ci-stub``, all-zero IDs) into the
+      # expected location. This is identical to the developer pattern
+      # where a real ``google-services.json`` lives untracked in
+      # ``sample-app/``; the stub gives CI a working equivalent for
+      # build-only verification (push delivery requires a real project
+      # — see ``sample-app/google-services.json.placeholder`` for the
+      # local-dev setup docs).
+      - name: Install CI google-services stub
+        run: cp sample-app/google-services.json.ci-stub sample-app/google-services.json
+
       - name: Assemble (debug)
         run: ./gradlew --no-daemon assembleDebug
 
