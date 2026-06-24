@@ -54,12 +54,15 @@ android {
         //
         // See sample-app/README.md "Local push notification testing" for
         // the full flow (Cloudflare Tunnel + credential upload + test send).
-        val pyrxWorkspaceId = providers.gradleProperty("pyrx.workspaceId")
-            .getOrElse("00000000-0000-0000-0000-000000000000")
-        val pyrxApiKey = providers.gradleProperty("pyrx.apiKey")
-            .getOrElse("psk_test_00000000000000000000000000000000")
-        val pyrxBaseUrl = providers.gradleProperty("pyrx.baseUrl")
-            .getOrElse("https://synapse-events.pyrx.tech")
+        val pyrxWorkspaceId =
+            providers.gradleProperty("pyrx.workspaceId")
+                .getOrElse("00000000-0000-0000-0000-000000000000")
+        val pyrxApiKey =
+            providers.gradleProperty("pyrx.apiKey")
+                .getOrElse("psk_test_00000000000000000000000000000000")
+        val pyrxBaseUrl =
+            providers.gradleProperty("pyrx.baseUrl")
+                .getOrElse("https://synapse-events.pyrx.tech")
 
         buildConfigField("String", "PYRX_WORKSPACE_ID", "\"$pyrxWorkspaceId\"")
         buildConfigField("String", "PYRX_API_KEY", "\"$pyrxApiKey\"")
