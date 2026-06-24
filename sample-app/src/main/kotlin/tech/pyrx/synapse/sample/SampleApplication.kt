@@ -43,7 +43,6 @@ import tech.pyrx.synapse.Pyrx
 import tech.pyrx.synapse.PyrxConfig
 import tech.pyrx.synapse.PyrxEnvironment
 import tech.pyrx.synapse.push.PyrxPush
-import tech.pyrx.synapse.sample.BuildConfig
 import java.util.UUID
 
 public class SampleApplication : Application() {

@@ -240,6 +240,8 @@ class MainActivity : ComponentActivity() {
 
 Both calls are safe to invoke on intents that don't carry Synapse payloads — they no-op silently.
 
+> **Critical: wire BOTH `onCreate` AND `onNewIntent`.** Skipping either path silently loses telemetry. `onCreate` covers cold-launch (the OS started your process specifically to deliver this tap). `onNewIntent` covers warm-launch (your process was already in memory). If only `onCreate` is wired, taps that hit a backgrounded-but-alive app will deliver the notification on-device but `push_logs.opened_at` on the backend will stay `NULL`. The reference implementation lives at [sample-app/src/main/kotlin/tech/pyrx/synapse/sample/MainActivity.kt](../sample-app/src/main/kotlin/tech/pyrx/synapse/sample/MainActivity.kt) — copy that pattern verbatim.
+
 For action buttons (e.g. "Reply", "Dismiss"), pull the action ID from your `PendingIntent` extras and call:
 
 ```kotlin
