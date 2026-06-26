@@ -30,14 +30,19 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v3
 
-      - name: Assemble release
-        run: ./gradlew --no-daemon assembleRelease
+      # ``sample-app`` requires a real ``google-services.json`` (gitignored —
+      # contains live Firebase credentials), so we can't build it on CI without
+      # injecting that file. The sample isn't published to Maven Central anyway,
+      # so the publish verify pass only needs the library modules
+      # (``synapse-core``, ``synapse-push``, ``synapse-inapp``).
+      - name: Assemble release (library modules only)
+        run: ./gradlew --no-daemon :synapse-core:assembleRelease :synapse-push:assembleRelease :synapse-inapp:assembleRelease
 
-      - name: JVM unit tests
-        run: ./gradlew --no-daemon test
+      - name: JVM unit tests (library modules only)
+        run: ./gradlew --no-daemon :synapse-core:test :synapse-push:test :synapse-inapp:test
 
-      - name: ktlint + detekt
-        run: ./gradlew --no-daemon ktlintCheck detekt
+      - name: ktlint + detekt (library modules only)
+        run: ./gradlew --no-daemon :synapse-core:ktlintCheck :synapse-push:ktlintCheck :synapse-inapp:ktlintCheck :synapse-core:detekt :synapse-push:detekt :synapse-inapp:detekt
 
   publish:
     name: Publish to Sonatype Central Portal (NMCP aggregation)
