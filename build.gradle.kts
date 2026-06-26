@@ -41,10 +41,15 @@ nmcp {
         // shell env).
         username = providers.environmentVariable("CENTRAL_USERNAME")
         password = providers.environmentVariable("CENTRAL_PASSWORD")
-        // USER_MANAGED requires manual "Publish" click in the Central Portal
-        // dashboard after upload — safe default for first v0.1.0 dry-run.
-        // Flip to AUTOMATIC after the first verified release.
-        publicationType = "USER_MANAGED"
+        // AUTOMATIC publishes straight to Maven Central after Sonatype's
+        // validation pass — no manual "Publish" click required. Previous
+        // releases (v0.1.0 dry-run, v0.1.2 verified, v0.1.3 verified) used
+        // USER_MANAGED so each upload could be eyeballed before it shipped;
+        // now that the pipeline is proven, automatic publishing removes a
+        // 30-second human step from every release and unblocks downstream
+        // SDK publishes (RN, Flutter, etc.) that depend on a fresh native
+        // artifact landing in Central within the CI run.
+        publicationType = "AUTOMATIC"
     }
 }
 
