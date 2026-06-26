@@ -99,4 +99,30 @@ class DeviceMetadataTest {
         // "Etc/UTC". Always non-empty per JDK contract.
         assertTrue(tz.isNotEmpty(), "timezone must not be empty")
     }
+
+    // MARK: - sdkPlatform(variant)
+
+    @Test
+    fun `sdkPlatform with null variant returns bare android`() {
+        assertEquals("android", DeviceMetadata.sdkPlatform(null))
+    }
+
+    @Test
+    fun `sdkPlatform with non-empty variant appends suffix`() {
+        // The wrapper-variant convention: "android+<variant>".
+        assertEquals("android+rn", DeviceMetadata.sdkPlatform("rn"))
+        assertEquals("android+flutter", DeviceMetadata.sdkPlatform("flutter"))
+    }
+
+    @Test
+    fun `sdkPlatform variant trims whitespace`() {
+        assertEquals("android+rn", DeviceMetadata.sdkPlatform("  rn  "))
+    }
+
+    @Test
+    fun `sdkPlatform empty or blank variant falls back to bare android`() {
+        // Empty / blank should NOT produce the malformed wire value "android+".
+        assertEquals("android", DeviceMetadata.sdkPlatform(""))
+        assertEquals("android", DeviceMetadata.sdkPlatform("   "))
+    }
 }

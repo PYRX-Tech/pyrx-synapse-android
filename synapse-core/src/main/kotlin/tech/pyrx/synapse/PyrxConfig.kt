@@ -38,7 +38,43 @@ public data class PyrxConfig(
     val baseUrl: String = DEFAULT_BASE_URL,
     val logLevel: LogLevel = LogLevel.INFO,
     val maxQueueSize: Int = DEFAULT_MAX_QUEUE_SIZE,
+    /**
+     * Optional SDK-variant marker appended to the wire-level
+     * `sdk_platform` field on `/v1/devices` — telemetry only, never used
+     * for dispatch routing on the backend.
+     *
+     * When `null` (the default), the SDK reports `sdk_platform =
+     * "android"`, matching every existing bare-Android integration. When
+     * set, the wire value becomes `"android+<variant>"` — e.g. a React
+     * Native wrapper passes `sdkVariant = "rn"` so the dashboard's
+     * Device Explorer can distinguish a React Native install from a
+     * native install.
+     *
+     * Backend dispatch (APNs vs FCM) reads `Device.platform` separately
+     * (`"ios"` / `"android"`), so this variant is invisible to push
+     * routing — it only changes what shows up in telemetry surfaces.
+     *
+     * Wrappers SHOULD use a short lowercase identifier (`"rn"`,
+     * `"flutter"`, `"unity"`). The SDK does NOT validate the value
+     * beyond trimming whitespace and collapsing empty/blank to `null`
+     * inside [normalizedSdkVariant] so misuse like `sdkVariant = ""`
+     * doesn't produce the malformed wire value `"android+"`.
+     */
+    val sdkVariant: String? = null,
 ) {
+    /**
+     * Trimmed view of [sdkVariant] — empty/blank collapses to `null`.
+     * Exposed for the push module (which threads the value through to
+     * `DeviceMetadata.sdkPlatform(variant)` at registration time)
+     * without forcing every reader to repeat the trim+collapse dance.
+     *
+     * Pure / cheap. Safe to call on every push registration.
+     */
+    public fun normalizedSdkVariant(): String? {
+        val trimmed = sdkVariant?.trim()
+        return if (trimmed.isNullOrEmpty()) null else trimmed
+    }
+
     /**
      * Validate this configuration. Called by [Pyrx.initialize] before any
      * other setup runs. Throws [PyrxError.InvalidConfig] with a precise

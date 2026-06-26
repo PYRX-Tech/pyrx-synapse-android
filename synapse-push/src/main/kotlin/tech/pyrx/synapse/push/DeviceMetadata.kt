@@ -97,6 +97,26 @@ public object DeviceMetadata {
     public fun sdkPlatform(): String = PyrxConstants.PLATFORM
 
     /**
+     * SDK platform identifier with an optional wrapper-variant suffix —
+     * e.g. `"android"` (no variant) or `"android+rn"` (React Native wrapper).
+     *
+     * The suffix is **telemetry-only**: the backend's push dispatcher
+     * routes on `Device.platform` (`"ios"` / `"android"`), not on
+     * `sdk_platform`, so a variant value can never break delivery.
+     * Wrappers pass their identifier via `PyrxConfig.sdkVariant`; the
+     * [PushRegistration] class threads that value through to this
+     * helper.
+     *
+     * Empty / whitespace-only values fall back to the bare
+     * [PyrxConstants.PLATFORM] string so misuse never produces the
+     * malformed wire value `"android+"`.
+     */
+    public fun sdkPlatform(variant: String?): String {
+        val trimmed = variant?.trim()
+        return if (trimmed.isNullOrEmpty()) PyrxConstants.PLATFORM else "${PyrxConstants.PLATFORM}+$trimmed"
+    }
+
+    /**
      * Human-readable OS string, e.g. `"Android 14"`.
      *
      * We deliberately prepend `"Android "` rather than sending the bare
