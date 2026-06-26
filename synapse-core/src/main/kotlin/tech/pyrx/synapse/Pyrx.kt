@@ -715,6 +715,15 @@ public object Pyrx {
         val environment: WireEnvironment,
         val externalIdProvider: suspend () -> String,
         val trackProvider: suspend (eventName: String, properties: Map<String, JSONValue>?) -> Unit,
+        /**
+         * Optional wrapper-variant marker forwarded from
+         * [PyrxConfig.sdkVariant] (already trimmed via
+         * [PyrxConfig.normalizedSdkVariant]). Threaded into
+         * `PushRegistration` by `PyrxPush.install` so the wire-level
+         * `sdk_platform` field becomes `"android+<variant>"`. `null`
+         * for every bare-Android integration (the default).
+         */
+        val sdkVariant: String? = null,
     )
 
     /**
@@ -785,6 +794,10 @@ public object Pyrx {
             trackProvider = { name, props ->
                 nonNullEvents.track(eventName = name, properties = props)
             },
+            // Forward the normalized variant (trim + empty→null) so the
+            // push module can pass it to DeviceMetadata.sdkPlatform(variant)
+            // without re-running the same normalization.
+            sdkVariant = nonNullCfg.normalizedSdkVariant(),
         )
     }
 

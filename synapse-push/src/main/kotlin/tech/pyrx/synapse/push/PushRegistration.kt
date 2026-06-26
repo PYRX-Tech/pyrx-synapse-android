@@ -81,6 +81,15 @@ public class PushRegistration(
     private val storage: PyrxStorage,
     private val httpClient: HTTPClient,
     private val environment: WireEnvironment,
+    /**
+     * Optional wrapper-variant marker (e.g. `"rn"`) appended to the wire
+     * `sdk_platform` field as `"android+<variant>"`. Telemetry-only;
+     * never influences dispatch routing. Threaded from
+     * [tech.pyrx.synapse.PyrxConfig.sdkVariant] via [PyrxPush.install]
+     * at construction time so the variant doesn't have to be re-resolved
+     * on every registration.
+     */
+    private val sdkVariant: String? = null,
 ) {
     // MARK: - Token registration
 
@@ -133,7 +142,7 @@ public class PushRegistration(
                 bundleId = DeviceMetadata.bundleId(context),
                 appVersion = DeviceMetadata.appVersion(context),
                 sdkVersion = DeviceMetadata.sdkVersion(),
-                sdkPlatform = DeviceMetadata.sdkPlatform(),
+                sdkPlatform = DeviceMetadata.sdkPlatform(sdkVariant),
                 osVersion = DeviceMetadata.osVersion(),
                 deviceModel = DeviceMetadata.deviceModel(),
                 locale = DeviceMetadata.locale(),

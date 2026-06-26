@@ -86,7 +86,55 @@ class PyrxConfigTest {
     @Test
     fun `SDK constants match the locked release values`() {
         // PR 7 release script bumps SDK_VERSION; PLATFORM is forever "android".
-        assertEquals("0.1.2", PyrxConstants.SDK_VERSION)
+        assertEquals("0.1.3", PyrxConstants.SDK_VERSION)
         assertEquals("android", PyrxConstants.PLATFORM)
+    }
+
+    // MARK: - sdkVariant
+
+    @Test
+    fun `sdkVariant defaults to null`() {
+        // A bare-Android integration never sets this — verify the default
+        // does NOT inject a wrapper marker into the wire payload.
+        val cfg = PyrxConfig(workspaceId = sampleWorkspace, apiKey = "psk_test_abc123")
+        assertEquals(null, cfg.sdkVariant)
+        assertEquals(null, cfg.normalizedSdkVariant())
+    }
+
+    @Test
+    fun `sdkVariant passes through for a valid value`() {
+        val cfg =
+            PyrxConfig(
+                workspaceId = sampleWorkspace,
+                apiKey = "psk_test_abc123",
+                sdkVariant = "rn",
+            )
+        assertEquals("rn", cfg.sdkVariant)
+        assertEquals("rn", cfg.normalizedSdkVariant())
+    }
+
+    @Test
+    fun `normalizedSdkVariant trims incidental whitespace`() {
+        // Trimming guards against accidental wire values like "android+ rn".
+        val cfg =
+            PyrxConfig(
+                workspaceId = sampleWorkspace,
+                apiKey = "psk_test_abc123",
+                sdkVariant = "  rn  ",
+            )
+        assertEquals("rn", cfg.normalizedSdkVariant())
+    }
+
+    @Test
+    fun `normalizedSdkVariant collapses empty and whitespace to null`() {
+        // Either of these would otherwise serialize as the malformed wire
+        // value "android+" — collapsing to null keeps telemetry clean.
+        val empty =
+            PyrxConfig(workspaceId = sampleWorkspace, apiKey = "psk_test_abc123", sdkVariant = "")
+        assertEquals(null, empty.normalizedSdkVariant())
+
+        val blanks =
+            PyrxConfig(workspaceId = sampleWorkspace, apiKey = "psk_test_abc123", sdkVariant = "   \n\t")
+        assertEquals(null, blanks.normalizedSdkVariant())
     }
 }

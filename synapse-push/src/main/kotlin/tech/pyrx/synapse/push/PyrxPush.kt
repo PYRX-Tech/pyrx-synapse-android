@@ -72,6 +72,7 @@ public object PyrxPush {
                 storage = hooks.storage,
                 httpClient = hooks.httpClient,
                 environment = hooks.environment,
+                sdkVariant = hooks.sdkVariant,
             )
         val handlers =
             PushHandlers(

@@ -56,7 +56,7 @@ class PushRegistrationTest {
         "contact_id":"66666666-6666-6666-6666-666666666666",
         "platform":"android","push_token":"fcm-token-xyz",
         "bundle_id":"tech.pyrx.synapse.push.test","app_version":"1.0.0",
-        "sdk_version":"0.1.2","sdk_platform":"android","os_version":"Android 14",
+        "sdk_version":"0.1.3","sdk_platform":"android","os_version":"Android 14",
         "device_model":"Google Pixel 8","locale":"en_US","timezone":"UTC",
         "environment":"live","push_enabled":true,
         "last_seen_at":"2026-06-21T00:00:00.000Z",
@@ -74,6 +74,7 @@ class PushRegistrationTest {
         environment: WireEnvironment = WireEnvironment.LIVE,
         storage: InMemoryStorage = InMemoryStorage(),
         session: MockHTTPSession = MockHTTPSession(),
+        sdkVariant: String? = null,
     ): Bench {
         val config =
             PyrxConfig(
@@ -89,6 +90,7 @@ class PushRegistrationTest {
                 storage = storage,
                 httpClient = httpClient,
                 environment = environment,
+                sdkVariant = sdkVariant,
             )
         return Bench(registration = registration, storage = storage, session = session)
     }
@@ -137,7 +139,7 @@ class PushRegistrationTest {
                 "bundle_id must be present",
             )
             assertNotNull(body["app_version"]?.jsonPrimitive?.contentOrNull, "app_version must be present")
-            assertEquals("0.1.2", body["sdk_version"]?.jsonPrimitive?.contentOrNull)
+            assertEquals("0.1.3", body["sdk_version"]?.jsonPrimitive?.contentOrNull)
             assertEquals("android", body["sdk_platform"]?.jsonPrimitive?.contentOrNull)
             val osVersion = body["os_version"]?.jsonPrimitive?.contentOrNull
             assertNotNull(osVersion)
@@ -215,5 +217,40 @@ class PushRegistrationTest {
                 }
             assertEquals("token must not be empty", err.reason)
             assertTrue(bench.session.requests.isEmpty(), "no HTTP must be issued on validation failure")
+        }
+
+    // MARK: - sdkVariant on the wire
+
+    @Test
+    fun `register with sdkVariant sends suffixed sdk_platform`() =
+        runTest {
+            // Simulate the React Native wrapper passing its identifier
+            // through PyrxConfig.sdkVariant ("rn") → PyrxPushHooks →
+            // PushRegistration.
+            val bench = makeBench(sdkVariant = "rn")
+            bench.session.enqueueJsonSuccess(json = deviceResponseJson)
+
+            bench.registration.register(token = "fcm-token-xyz", externalId = "user_42")
+
+            val body = parseBody(bench.session.requests[0].body)
+            // platform stays "android" (drives FCM dispatch); only
+            // sdk_platform carries the wrapper marker.
+            assertEquals("android", body["platform"]?.jsonPrimitive?.contentOrNull)
+            assertEquals("android+rn", body["sdk_platform"]?.jsonPrimitive?.contentOrNull)
+        }
+
+    @Test
+    fun `register without sdkVariant sends bare sdk_platform`() =
+        runTest {
+            // Bare-Android regression: no variant → no suffix. Locks
+            // behavior for every existing integration that pre-dates the
+            // variant field.
+            val bench = makeBench()
+            bench.session.enqueueJsonSuccess(json = deviceResponseJson)
+
+            bench.registration.register(token = "fcm-token-xyz", externalId = "user_42")
+
+            val body = parseBody(bench.session.requests[0].body)
+            assertEquals("android", body["sdk_platform"]?.jsonPrimitive?.contentOrNull)
         }
 }

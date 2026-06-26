@@ -14,6 +14,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.1.3] - 2026-06-26
+
+### Added
+- **`PyrxConfig.sdkVariant`** — new optional constructor parameter for cross-platform wrapper SDKs (React Native, Flutter, Unity, etc.) to mark their origin in telemetry. When set, the wire-level `sdk_platform` field on `/v1/devices` becomes `"android+<variant>"` (e.g. `"android+rn"`); when omitted (the default), the field remains `"android"`. The `Device.platform` field stays `"android"` regardless — push dispatch routing (APNs vs FCM) is unaffected. Telemetry-only.
+- **`DeviceMetadata.sdkPlatform(variant)`** — internal helper used by `PushRegistration` to compose the suffixed value. The bare-arg `DeviceMetadata.sdkPlatform()` is preserved for backward compatibility.
+- **`PyrxConfig.normalizedSdkVariant()`** — public helper that returns the trimmed `sdkVariant` with empty/blank collapsed to `null`, so the push module can pass the value to `DeviceMetadata.sdkPlatform(variant)` without re-running the same normalization.
+
+### Changed
+- `PushRegistration` constructor accepts an optional `sdkVariant: String?` parameter so the variant can flow from `PyrxConfig` to the wire payload without re-resolving on every call.
+- `Pyrx.PyrxPushHooks` carries the normalized `sdkVariant` (default `null` for source-compat with any external consumers); `PyrxPush.install` forwards it to `PushRegistration`.
+
+### Internal
+- New test coverage in `PyrxConfigTest` (default-null, pass-through, whitespace trimming, empty-collapses-to-null), `DeviceMetadataTest` (`sdkPlatform(variant)` contract), and `PushRegistrationTest` (wire payload assertions for both variant-set and bare cases).
+
+---
+
 ## [0.1.0] - 2026-06-21
 
 Initial public release. Ships the complete Phase 8.4b Android SDK surface, mirroring the iOS SDK PR-for-PR with platform-native idioms.
