@@ -52,6 +52,7 @@ import androidx.compose.material.icons.filled.BugReport
 import androidx.compose.material.icons.filled.Lock
 import androidx.compose.material.icons.filled.NotificationsActive
 import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.Visibility
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -121,6 +122,7 @@ private enum class BottomTab(val label: String, val icon: ImageVector) {
     Identity("Identity", Icons.Filled.Person),
     Events("Events", Icons.Filled.Bolt),
     Push("Push", Icons.Filled.NotificationsActive),
+    Observer("Observer", Icons.Filled.Visibility),
     Debug("Debug", Icons.Filled.BugReport),
     Privacy("Privacy", Icons.Filled.Lock),
 }
@@ -151,6 +153,7 @@ private fun SampleAppShell() {
             BottomTab.Identity -> IdentityScreen(modifier = modifier)
             BottomTab.Events -> EventsScreen(modifier = modifier)
             BottomTab.Push -> PushScreen(modifier = modifier)
+            BottomTab.Observer -> ObserverScreen(modifier = modifier)
             BottomTab.Debug -> DebugInfoScreen(modifier = modifier)
             BottomTab.Privacy -> PrivacyScreen(modifier = modifier)
         }

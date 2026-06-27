@@ -18,8 +18,12 @@ complexity:
     # private helpers that back them. Bumped to 25 for PR 4's push surface;
     # bumped to 35 for PR 5's privacy + cold-start attribution surface
     # (setTrackingEnabled, deleteUser, recordColdStartLaunch + their private
-    # helpers). Any growth past that should seriously re-examine grouping.
-    thresholdInObjects: 35
+    # helpers); bumped to 40 for Phase 9.2.1's observer surface
+    # (publishEvent, buildPushReceivedFromData, shouldSuppressClickForColdStart,
+    # currentIdentitySnapshot, emitIdentityChanged). Any growth past that
+    # should seriously re-examine grouping — consider moving observer
+    # plumbing to a separate companion or facade.
+    thresholdInObjects: 40
   LongParameterList:
     active: true
     functionThreshold: 7

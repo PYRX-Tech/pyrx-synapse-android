@@ -14,6 +14,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ---
 
+## [0.1.4] - 2026-06-27
+
+### Added
+- **`feat(observer):` public observer `SharedFlow` for SDK events** — first public streaming surface on `tech.pyrx.synapse:synapse-{core,push}`. Five event cases shipped in v1 ([Phase 9.2.1](https://github.com/PYRX-Tech/pyrx.synapse/blob/master/docs/plans/phase-9.2.1-native-callback-observers-plan-2026-06-27.md)):
+  - `PyrxEvent.PushReceived` — foreground push delivered (publishes from `PushHandlers.recordPushReceived`).
+  - `PyrxEvent.PushClicked` — body tap or action-button press (publishes from `PushHandlers.handleNotificationTap` / `handleActionButton`).
+  - `PyrxEvent.PushReceivedColdStart` — app launched from a tapped push (publishes from `Pyrx.recordColdStartLaunch` → `recordColdStartAttribution`).
+  - `PyrxEvent.QueueDrained(count)` — internal event queue successfully flushed `count` events.
+  - `PyrxEvent.IdentityChanged(before, after)` — successful `identify` / `alias` / `logout` transition with `IdentitySnapshot` deltas (per [Q3 user override](https://github.com/PYRX-Tech/pyrx.synapse/blob/master/docs/plans/phase-9.2.1-native-callback-observers-plan-2026-06-27.md#q3-d4-event-taxonomy--four-events-defer-identity-or-five-events-ship-identitychanged-in-v1)).
+- **`Pyrx.events: SharedFlow<PyrxEvent>`** — multi-subscriber hot stream, backed by `MutableSharedFlow(replay = 4, extraBufferCapacity = 16, onBufferOverflow = DROP_OLDEST)`. Late subscribers receive the most-recent 4 events for the cold-start race window; every collector sees every event.
+- **`Pyrx.publishEvent(event): Boolean`** — cross-module seam used by `synapse-push` and `synapse-core`'s fire-points. Public-but-internal-marker; host apps never call this directly.
+- **`PyrxAttributeValue` typealias** — promotes the internal `JSONValue` to a friendlier name on observer payloads so consumers don't reach into `network.*` from event-handling code.
+- **`IdentitySnapshot`** — `(externalId: String?, anonymousId: String?, resolvedAt: Instant)` carried by `IdentityChanged.before`/`.after`. Dashboard-style apps use this to refetch user data on login state change without polling.
+- **`Pyrx.shouldSuppressClickForColdStart(pushLogId)`** + internal `ColdStartClickDedup` — enforces the non-negotiable invariant from [Risk Register item #1](https://github.com/PYRX-Tech/pyrx.synapse/blob/master/docs/plans/phase-9.2.1-native-callback-observers-plan-2026-06-27.md#7-risk-register): a payload that fires `PushReceivedColdStart` does NOT also fire `PushClicked` within the 5-second dedup window. JUnit-covered both ways.
+- **`PushReceivedEvent` / `PushClickedEvent`** — typed payloads with `pushLogId`, `title`/`body`, `deepLink`, `actionId`, `pyrxAttributes`, `userInfo`, `receivedAt`/`clickedAt`. Mirrors iOS `PYRXSynapse 0.1.2` field-for-field.
+- **Sample app** — new "Observer" tab (`ObserverScreen.kt`) demonstrating `Pyrx.events.collect { ... }` inside `LaunchedEffect`. Shows received events as a colour-coded LazyColumn.
+- **Coverage** — 35 new JUnit/Robolectric tests across `synapse-core` (`ColdStartClickDedupTest`, `PyrxEventsFlowTest`, `IdentityChangedFireTest`, `QueueDrainedFireTest`) and `synapse-push` (`PushHandlersObserverTest`, `ColdStartDedupIntegrationTest`). SharedFlow semantics (replay, multi-collector, `DROP_OLDEST` under burst, cross-thread `publishEvent`), every fire-point, identity transitions, cold-start dedup invariant.
+- **Docs** — `docs/observers.md` API reference with lifecycle-scope guidance, late-subscriber semantics, and the cold-start dedup contract.
+
+### Changed
+- `PushHandlers.recordPushReceived` / `handleNotificationTap` / `handleActionButton` now also publish observer events. The analytics path (`/v1/push/opened`, `/v1/push/click`, `$push_received` event-queue enqueue) is unchanged — observer publishes wrap the existing telemetry calls so a failing observer subscriber cannot break the SDK's wire-side delivery.
+- `EventQueue.drainLoop` publishes `PyrxEvent.QueueDrained` after successful drain passes that flushed at least one event. No-op drains (zero successful flushes) do NOT publish.
+- `Pyrx.identify` / `alias` / `logout` capture before/after `IdentitySnapshot` and publish `PyrxEvent.IdentityChanged` after the underlying `IdentityManager` call succeeds.
+- `config/detekt/detekt.yml` — `TooManyFunctions.thresholdInObjects` bumped from 35 to 40 for `Pyrx`'s observer plumbing (`publishEvent`, `buildPushReceivedFromData`, `shouldSuppressClickForColdStart`, `currentIdentitySnapshot`, `emitIdentityChanged`). Documented in the config comment.
+
+### Internal
+- `tech.pyrx.synapse.observer` — new package on `synapse-core` with `PyrxEvent`, `PushReceivedEvent`, `PushClickedEvent`, `IdentitySnapshot`, `PyrxAttributeValue`, `ColdStartClickDedup`.
+- API surface is **purely additive** — every existing public API behaves identically. The 0.1.3 → 0.1.4 bump is a minor (per [Phase 9.2.1 D1 + Q6](https://github.com/PYRX-Tech/pyrx.synapse/blob/master/docs/plans/phase-9.2.1-native-callback-observers-plan-2026-06-27.md#d1-the-observer-surface-is-the-sdks-first-public-streaming-api-its-positioned-as-a-v1-customer-facing-feature-not-internal--for-sdk-wrappers-and-the-native-sdk-changelogs-treat-it-as-a-featobserver-headline)) — `feat(observer):` headline.
+- Coordinated release: in flight alongside iOS `PYRXSynapse 0.1.2` and React Native `@pyrx/synapse-react-native 0.2.0` (which adds `usePushReceivedColdStart` and `useIdentityChanged` hooks that ride on this surface). See the Phase 9.2.1 plan for the full sequence.
+
+### Known limitations
+- The `PyrxEvent.PushReceived.title` / `.body` are empty strings when the push is data-only (no FCM `notification` payload). Foreground deliveries reach `PushHandlers.recordPushReceived` with `RemoteMessage.data` only; consumers needing the rich notification metadata should subscribe to `FirebaseMessagingService` directly. Cold-start emissions read from intent extras — same caveat.
+- The `ColdStartClickDedup` window is fixed at 5 seconds; configurability is a deferred follow-up if a real consumer use case emerges.
+
+---
+
 ## [0.1.3] - 2026-06-26
 
 ### Added
@@ -102,5 +138,7 @@ Initial public release. Ships the complete Phase 8.4b Android SDK surface, mirro
 
 ---
 
-[Unreleased]: https://github.com/PYRX-Tech/pyrx-synapse-android/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/PYRX-Tech/pyrx-synapse-android/compare/v0.1.4...HEAD
+[0.1.4]: https://github.com/PYRX-Tech/pyrx-synapse-android/compare/v0.1.3...v0.1.4
+[0.1.3]: https://github.com/PYRX-Tech/pyrx-synapse-android/compare/v0.1.0...v0.1.3
 [0.1.0]: https://github.com/PYRX-Tech/pyrx-synapse-android/releases/tag/v0.1.0

@@ -64,12 +64,17 @@ package tech.pyrx.synapse.push
 
 import android.content.Intent
 import android.util.Log
+import tech.pyrx.synapse.Pyrx
 import tech.pyrx.synapse.network.HTTPClient
 import tech.pyrx.synapse.network.JSONValue
 import tech.pyrx.synapse.network.PushClickedRequest
 import tech.pyrx.synapse.network.PushOpenedRequest
 import tech.pyrx.synapse.network.PushTelemetryResponse
+import tech.pyrx.synapse.observer.PushClickedEvent
+import tech.pyrx.synapse.observer.PyrxAttributeValue
+import tech.pyrx.synapse.observer.PyrxEvent
 import java.text.SimpleDateFormat
+import java.time.Instant
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
@@ -110,13 +115,35 @@ public class PushHandlers(
                 return false
             }
         val attrs = pyrxAttributes(data, pushLogId)
+        val trackSucceeded =
+            try {
+                trackProvider(PUSH_RECEIVED_EVENT, attrs)
+                true
+            } catch (e: Throwable) {
+                Log.w(TAG, "recordPushReceived: track failed — ${e.message}")
+                false
+            }
+
+        // Phase 9.2.1 — observer fire-point. Publish AFTER the analytics
+        // enqueue path so consumers see events in the same order the
+        // backend will. Foreground push delivery, so this is the canonical
+        // PushReceived emission (cold-start path emits
+        // PushReceivedColdStart from Pyrx.recordColdStartAttribution
+        // instead). Buffer-safe via tryEmit — non-suspending so we don't
+        // need an extra coroutine hop for the publish.
         try {
-            trackProvider(PUSH_RECEIVED_EVENT, attrs)
-            return true
+            Pyrx.publishEvent(
+                PyrxEvent.PushReceived(
+                    Pyrx.buildPushReceivedFromData(data, pushLogId),
+                ),
+            )
         } catch (e: Throwable) {
-            Log.w(TAG, "recordPushReceived: track failed — ${e.message}")
-            return false
+            // The observer publish must NOT break the analytics path.
+            // Catch + log; the SDK's existing telemetry is unaffected.
+            Log.w(TAG, "recordPushReceived: observer publish failed — ${e.message}")
         }
+
+        return trackSucceeded
     }
 
     // MARK: - Notification tap → /v1/push/opened
@@ -157,6 +184,35 @@ public class PushHandlers(
             )
         } catch (e: Throwable) {
             Log.w(TAG, "push/opened: failed — ${e.message}")
+        }
+
+        // Phase 9.2.1 — observer fire-point. Cold-start dedup invariant:
+        // if the same pushLogId already fired PushReceivedColdStart in
+        // the prior 5 seconds, suppress this paired PushClicked. The
+        // Android Activity lifecycle delivers cold-start as
+        // `onCreate(intent)` AND queues `handleNotificationTap(intent)`
+        // for the same payload — without dedup, the observer would emit
+        // both events for one user gesture (see Risk Register item #1).
+        if (Pyrx.shouldSuppressClickForColdStart(pushLogId)) {
+            Log.d(
+                TAG,
+                "handleNotificationTap: PushClicked suppressed by cold-start dedup " +
+                    "(pushLogId=$pushLogId)",
+            )
+            return
+        }
+        try {
+            Pyrx.publishEvent(
+                PyrxEvent.PushClicked(
+                    buildPushClickedEvent(
+                        data = data,
+                        pushLogId = pushLogId,
+                        actionId = null,
+                    ),
+                ),
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "handleNotificationTap: observer publish failed — ${e.message}")
         }
     }
 
@@ -203,6 +259,26 @@ public class PushHandlers(
             )
         } catch (e: Throwable) {
             Log.w(TAG, "push/click: failed — ${e.message}")
+        }
+
+        // Phase 9.2.1 — observer fire-point. Action buttons are an
+        // explicit user gesture on a notification that's already on
+        // screen; they cannot collide with the cold-start path (a
+        // cold-start tap goes through handleNotificationTap, not
+        // handleActionButton). So we publish unconditionally here — no
+        // dedup needed.
+        try {
+            Pyrx.publishEvent(
+                PyrxEvent.PushClicked(
+                    buildPushClickedEvent(
+                        data = data,
+                        pushLogId = pushLogId,
+                        actionId = actionId,
+                    ),
+                ),
+            )
+        } catch (e: Throwable) {
+            Log.w(TAG, "handleActionButton: observer publish failed — ${e.message}")
         }
     }
 
@@ -274,6 +350,40 @@ public class PushHandlers(
         // SDK-stamped — last write wins so a campaign cannot spoof the id.
         converted[KEY_ATTR_PUSH_LOG_ID] = JSONValue.Str(pushLogId)
         return converted
+    }
+
+    // MARK: - Observer payload builders (Phase 9.2.1)
+
+    /**
+     * Build a [PushClickedEvent] from a parsed data map + already-
+     * normalised [pushLogId] + tap discriminator. Shared between the
+     * body-tap and action-button fire-points so both emit the same shape.
+     *
+     * `pyrxAttributes` follows the same projection rules as
+     * `recordPushReceived`: strip the `pyrx_attrs_` prefix from keys
+     * carrying campaign metadata; always re-stamp the SDK-owned
+     * `push_log_id` attribute last so a campaign cannot spoof it.
+     */
+    private fun buildPushClickedEvent(
+        data: Map<String, String>,
+        pushLogId: String,
+        actionId: String?,
+    ): PushClickedEvent {
+        val attrs = mutableMapOf<String, PyrxAttributeValue>()
+        for ((rawKey, value) in data) {
+            if (rawKey.startsWith(PREFIX_PYRX_ATTRS)) {
+                val key = rawKey.removePrefix(PREFIX_PYRX_ATTRS)
+                if (key.isNotEmpty()) attrs[key] = JSONValue.Str(value)
+            }
+        }
+        attrs[KEY_ATTR_PUSH_LOG_ID] = JSONValue.Str(pushLogId)
+        return PushClickedEvent(
+            pushLogId = pushLogId,
+            deepLink = data[KEY_DEEP_LINK],
+            actionId = actionId,
+            pyrxAttributes = attrs.toMap(),
+            clickedAt = Instant.now(),
+        )
     }
 
     // MARK: - Helpers

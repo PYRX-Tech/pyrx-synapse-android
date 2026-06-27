@@ -85,12 +85,14 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import tech.pyrx.synapse.Pyrx
 import tech.pyrx.synapse.PyrxError
 import tech.pyrx.synapse.PyrxLogger
 import tech.pyrx.synapse.PyrxNetworkError
 import tech.pyrx.synapse.network.EventAcceptedResponse
 import tech.pyrx.synapse.network.EventIngestRequest
 import tech.pyrx.synapse.network.HTTPClient
+import tech.pyrx.synapse.observer.PyrxEvent
 
 /**
  * Clock seam — production uses [kotlinx.coroutines.delay]; tests inject a
@@ -348,6 +350,9 @@ internal class EventQueue(
 
         var iterations = 0
         var retriesThisPass = 0
+        // Phase 9.2.1 — observer fire-point counter. Tracks the number of
+        // events flushed in this drain pass for PyrxEvent.QueueDrained.
+        var successfullyFlushed = 0
 
         while (iterations < MAX_PER_DRAIN) {
             iterations += 1
@@ -360,6 +365,7 @@ internal class EventQueue(
                     dao.delete(head)
                     consecutiveFailures = 0
                     retriesThisPass = 0
+                    successfullyFlushed += 1
                 }
                 is Outcome.DropMalformed -> {
                     dao.delete(head)
@@ -406,6 +412,26 @@ internal class EventQueue(
             logger.debug { "EventQueue drained — 0 events remaining" }
         } else {
             logger.debug { "EventQueue drain paused — $remaining event(s) remaining" }
+        }
+
+        emitQueueDrainedIfProgress(successfullyFlushed)
+    }
+
+    /**
+     * Phase 9.2.1 — observer fire-point helper extracted from
+     * [drainLoop] so the loop body stays under detekt's `LongMethod`
+     * budget (60 lines). Publishes [PyrxEvent.QueueDrained] only when
+     * the drain pass made progress; a no-op drain (zero events
+     * successfully flushed) is not worth notifying observers about.
+     * Defensively swallows observer publish failures so a buggy
+     * subscriber cannot break the queue's drain loop.
+     */
+    private fun emitQueueDrainedIfProgress(successfullyFlushed: Int) {
+        if (successfullyFlushed == 0) return
+        try {
+            Pyrx.publishEvent(PyrxEvent.QueueDrained(count = successfullyFlushed))
+        } catch (e: Throwable) {
+            logger.warning { "EventQueue: observer publish failed — ${e.message}" }
         }
     }
 

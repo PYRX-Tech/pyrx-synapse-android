@@ -36,6 +36,10 @@ package tech.pyrx.synapse
 
 import android.content.Context
 import android.content.Intent
+import kotlinx.coroutines.channels.BufferOverflow
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -48,6 +52,11 @@ import tech.pyrx.synapse.network.HTTPSession
 import tech.pyrx.synapse.network.JSONValue
 import tech.pyrx.synapse.network.OkHttpSession
 import tech.pyrx.synapse.network.WireEnvironment
+import tech.pyrx.synapse.observer.ColdStartClickDedup
+import tech.pyrx.synapse.observer.IdentitySnapshot
+import tech.pyrx.synapse.observer.PushReceivedEvent
+import tech.pyrx.synapse.observer.PyrxAttributeValue
+import tech.pyrx.synapse.observer.PyrxEvent
 import tech.pyrx.synapse.privacy.PrivacyManager
 import tech.pyrx.synapse.queue.EventQueue
 import tech.pyrx.synapse.queue.EventQueueDatabase
@@ -57,6 +66,7 @@ import tech.pyrx.synapse.queue.Reachability
 import tech.pyrx.synapse.storage.EncryptedStore
 import tech.pyrx.synapse.storage.PyrxStorage
 import tech.pyrx.synapse.storage.PyrxStorageKey
+import java.time.Instant
 import java.util.UUID
 
 public object Pyrx {
@@ -140,6 +150,117 @@ public object Pyrx {
      */
     @Volatile
     private var appContext: Context? = null
+
+    // MARK: - Observer surface (Phase 9.2.1)
+
+    /**
+     * Hot stream backing [events]. Replay = 4 covers the realistic cold-
+     * start race window (one cold-start push + one identify on launch +
+     * one queue drain + one headroom slot) without inviting stale-event
+     * surprise for late subscribers; see D7. `extraBufferCapacity = 16`
+     * + `DROP_OLDEST` ensures `tryEmit` from non-coroutine fire-points
+     * (FCM service callbacks via `runBlocking`) never blocks and never
+     * silently fails under normal load.
+     *
+     * Process-scoped — survives every public mutation including
+     * `deleteUser` (the GDPR cascade wipes storage, not the observer
+     * stream itself).
+     *
+     * Literals are inlined into the constructor call below because
+     * Kotlin singleton `object` initialisation runs field initializers
+     * before any body-level `const val` declared lower in the file is
+     * reachable, and a nested `companion object` is illegal inside an
+     * `object`. The numbers themselves are documented in the D7 plan
+     * decision and called out in the `events` KDoc.
+     */
+    private val mutableEvents: MutableSharedFlow<PyrxEvent> =
+        MutableSharedFlow(
+            replay = 4,
+            extraBufferCapacity = 16,
+            onBufferOverflow = BufferOverflow.DROP_OLDEST,
+        )
+
+    /**
+     * Cold-start vs. click dedup. Records `pushLogId`s that fired
+     * [PyrxEvent.PushReceivedColdStart]; subsequent same-payload
+     * `PushClicked` emissions within the 5-second window are suppressed.
+     * See `observer/ColdStartClickDedup.kt` for the invariant rationale.
+     *
+     * Held on the Pyrx singleton so the deduper survives across
+     * `recordColdStartLaunch` (caller's coroutine) and the FCM service's
+     * `handleNotificationTap` (different caller, same in-memory map).
+     */
+    private val coldStartDedup: ColdStartClickDedup = ColdStartClickDedup()
+
+    /**
+     * Multi-subscriber hot stream of SDK events. Every collector gets
+     * every event; late subscribers receive the most-recent 4 events
+     * (replay buffer) so the React Native bridge + native consumers can
+     * race to subscribe on cold start without losing the launch payload.
+     *
+     * Collect inside your own coroutine scope so cancellation is
+     * automatic when the host context dies:
+     *
+     *     lifecycleScope.launch {
+     *         Pyrx.events.collect { event ->
+     *             when (event) {
+     *                 is PyrxEvent.PushReceived -> showToast(event.event.title)
+     *                 is PyrxEvent.PushClicked -> route(event.event.deepLink)
+     *                 is PyrxEvent.PushReceivedColdStart -> coldStartRoute(event.event)
+     *                 is PyrxEvent.QueueDrained -> Log.d(TAG, "drained ${event.count}")
+     *                 is PyrxEvent.IdentityChanged -> refetchUser(event.after)
+     *             }
+     *         }
+     *     }
+     *
+     * Public for cross-module access: synapse-push publishes through
+     * [publishEvent] when foreground pushes / taps arrive. Apps must
+     * NOT call [publishEvent] directly — it's the bridge seam, not a
+     * host-app surface.
+     */
+    public val events: SharedFlow<PyrxEvent>
+        get() = mutableEvents.asSharedFlow()
+
+    /**
+     * Bridge seam — publishes [event] to all subscribers of [events].
+     * Public-but-internal-marker: visibility is `public` because
+     * `synapse-push` lives in a separate Gradle module and needs cross-
+     * module access; host apps NEVER call this directly.
+     *
+     * Non-suspending by design. The backing [MutableSharedFlow] is sized
+     * (`extraBufferCapacity = 16`, `DROP_OLDEST` overflow) so `tryEmit`
+     * succeeds under all realistic load. Fire-points (especially in
+     * `PushHandlers.kt`, which run from the FCM service thread via
+     * `runBlocking`) can call this without arranging a coroutine scope.
+     *
+     * Why `tryEmit` instead of `suspend emit(...)`:
+     *   - `MutableSharedFlow.emit(...)` is suspending — would require
+     *     every fire-point to be in a coroutine context.
+     *   - `tryEmit(...)` is non-suspending and returns `false` only when
+     *     the buffer is exhausted. With our DROP_OLDEST + 16-slot extra
+     *     buffer, that never happens in practice — the oldest event is
+     *     dropped to make room. We log + drop on the (impossible-in-
+     *     practice) failure path so a hypothetical edge case surfaces in
+     *     diagnostics instead of silently disappearing.
+     *
+     * Returns `true` on successful emission, `false` only if the buffer
+     * overflowed AND `DROP_OLDEST` could not make room (impossible with
+     * the current buffer sizing — kept in the contract for forward-
+     * compat in case the sizing changes).
+     */
+    public fun publishEvent(event: PyrxEvent): Boolean {
+        val emitted = mutableEvents.tryEmit(event)
+        if (!emitted) {
+            // Shouldn't happen with extraBufferCapacity=16 + DROP_OLDEST.
+            // Log + return so an unexpected buffer-state edge case is
+            // visible in diagnostics rather than silently dropped.
+            logger.warning {
+                "publishEvent: tryEmit returned false — observer buffer state degraded. " +
+                    "Event class: ${event::class.simpleName}"
+            }
+        }
+        return emitted
+    }
 
     // MARK: - Public API
 
@@ -437,7 +558,10 @@ public object Pyrx {
         traits: Map<String, JSONValue>? = null,
     ): IdentityResult {
         val manager = identityManager ?: throw PyrxError.NotInitialized
-        return manager.identify(externalId = externalId, traits = traits)
+        val before = currentIdentitySnapshot()
+        val result = manager.identify(externalId = externalId, traits = traits)
+        emitIdentityChanged(before = before)
+        return result
     }
 
     /**
@@ -456,7 +580,10 @@ public object Pyrx {
     @Throws(PyrxError::class)
     public suspend fun alias(newExternalId: String): IdentityResult {
         val manager = identityManager ?: throw PyrxError.NotInitialized
-        return manager.alias(newExternalId = newExternalId)
+        val before = currentIdentitySnapshot()
+        val result = manager.alias(newExternalId = newExternalId)
+        emitIdentityChanged(before = before)
+        return result
     }
 
     /**
@@ -475,7 +602,9 @@ public object Pyrx {
     @Throws(PyrxError::class)
     public suspend fun logout() {
         val manager = identityManager ?: throw PyrxError.NotInitialized
+        val before = currentIdentitySnapshot()
         manager.logout()
+        emitIdentityChanged(before = before)
     }
 
     // MARK: - Events API (PR 3)
@@ -952,6 +1081,13 @@ public object Pyrx {
         } catch (e: Throwable) {
             logger.warning { "recordColdStartAttribution: track failed — ${e.message}" }
         }
+
+        // Phase 9.2.1 — observer fire-point. Register the dedup BEFORE
+        // emission so a concurrent `handleNotificationTap` for the same
+        // payload (which on Android often fires in the same Activity
+        // launch sequence) suppresses its paired `PushClicked` correctly.
+        coldStartDedup.recordColdStart(pushLogId)
+        publishEvent(PyrxEvent.PushReceivedColdStart(buildPushReceivedFromData(data, pushLogId)))
     }
 
     /**
@@ -1012,6 +1148,102 @@ public object Pyrx {
         }
     }
 
+    // MARK: - Observer fire-point helpers (Phase 9.2.1)
+
+    /**
+     * Snapshot the SDK's currently-resolved identity (externalId +
+     * anonymousId) from storage, with the wall-clock instant the read
+     * happened. Returns `null` only if storage is not initialised — that
+     * indicates [identify] / [alias] / [logout] was called before
+     * [initialize] completed, which the underlying [IdentityManager]
+     * already throws on; the null return here is defensive.
+     *
+     * Used by [identify] / [alias] / [logout] to capture the
+     * pre-mutation snapshot for the [PyrxEvent.IdentityChanged.before]
+     * field and the post-mutation snapshot for `.after`.
+     */
+    private fun currentIdentitySnapshot(): IdentitySnapshot? {
+        val store = storage ?: return null
+        val external = runCatchingStorage { store.get(PyrxStorageKey.EXTERNAL_ID) }
+        val anon = runCatchingStorage { store.get(PyrxStorageKey.ANONYMOUS_ID) }
+        // If BOTH are null, the SDK is freshly installed and identify
+        // has never run — there is no prior identity to snapshot. We
+        // return null so the [PyrxEvent.IdentityChanged.before] field
+        // correctly reflects "no prior state recorded".
+        if (external == null && anon == null) return null
+        return IdentitySnapshot(
+            externalId = external,
+            anonymousId = anon,
+            resolvedAt = Instant.now(),
+        )
+    }
+
+    /**
+     * Emit [PyrxEvent.IdentityChanged] with the supplied [before]
+     * snapshot and the freshly-read `after` snapshot. If the after-read
+     * yields null (defensive — should not happen post-identify) we skip
+     * emission rather than publish a malformed event.
+     */
+    private fun emitIdentityChanged(before: IdentitySnapshot?) {
+        val after = currentIdentitySnapshot() ?: return
+        publishEvent(PyrxEvent.IdentityChanged(before = before, after = after))
+    }
+
+    /**
+     * Build a [PushReceivedEvent] from a flat string data map + parsed
+     * [pushLogId]. Used by both [recordColdStartAttribution] (here, for
+     * the cold-start emission) and `synapse-push`'s `PushHandlers`
+     * (cross-module — `recordPushReceived` calls this so cold-start and
+     * foreground emissions share the same payload shape).
+     *
+     * `title` / `body` are empty strings when the push is data-only
+     * (no `notification` payload). FCM's [com.google.firebase.messaging
+     * .RemoteMessage] surfaces these via `.notification?.title` /
+     * `.body` — but here we're working from `data` only (intent extras
+     * for cold-start, RemoteMessage.data for foreground), so title /
+     * body are not directly available. Consumers that need them can
+     * subscribe to [PyrxEvent.PushReceived] (which builds them from
+     * `RemoteMessage.notification`) — the cold-start variant captures
+     * what the host app gets from the launch intent.
+     *
+     * Public-but-bridge-only — host apps never call this directly.
+     */
+    public fun buildPushReceivedFromData(
+        data: Map<String, String>,
+        pushLogId: String,
+    ): PushReceivedEvent {
+        val attrs = mutableMapOf<String, PyrxAttributeValue>()
+        val userInfo = mutableMapOf<String, PyrxAttributeValue>()
+        for ((rawKey, value) in data) {
+            val typed: PyrxAttributeValue = JSONValue.Str(value)
+            userInfo[rawKey] = typed
+            if (rawKey.startsWith(PREFIX_PYRX_ATTRS)) {
+                val key = rawKey.removePrefix(PREFIX_PYRX_ATTRS)
+                if (key.isNotEmpty()) attrs[key] = typed
+            }
+        }
+        attrs[KEY_ATTR_PUSH_LOG_ID] = JSONValue.Str(pushLogId)
+        return PushReceivedEvent(
+            pushLogId = pushLogId,
+            title = data[KEY_NOTIFICATION_TITLE] ?: "",
+            body = data[KEY_NOTIFICATION_BODY] ?: "",
+            pyrxAttributes = attrs.toMap(),
+            userInfo = userInfo.toMap(),
+            receivedAt = Instant.now(),
+        )
+    }
+
+    /**
+     * Cross-module accessor for the cold-start dedup. `synapse-push`'s
+     * `PushHandlers` calls this from `handleNotificationTap` to decide
+     * whether to suppress the paired `PushClicked` emission for a
+     * payload that already fired `PushReceivedColdStart`.
+     *
+     * Public-but-bridge-only — host apps never call this directly.
+     */
+    public fun shouldSuppressClickForColdStart(pushLogId: String): Boolean =
+        coldStartDedup.shouldSuppressClick(pushLogId)
+
     // MARK: - Internal seam for tests
 
     /**
@@ -1019,6 +1251,7 @@ public object Pyrx {
      * never visible from a host app's classpath. Production callers cannot
      * "uninitialize" the SDK.
      */
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     internal fun resetForTesting() {
         // Tear down background jobs first so the launched drain coroutines
         // can't outlive the reset. shutdown() is a suspend function; we
@@ -1041,6 +1274,14 @@ public object Pyrx {
         pendingColdStartIntent = null
         appContext = null
         pushBridge = null
+        // Phase 9.2.1 — clear the cold-start dedup so cross-test pushLogId
+        // entries from a previous test don't leak suppression state into
+        // the next test. The SharedFlow replay buffer is intentionally
+        // NOT cleared — `resetSharedFlowReplayCacheForTesting` would
+        // require reaching into MutableSharedFlow internals; tests that
+        // care about replay state use a fresh subscriber instead.
+        coldStartDedup.clear()
+        mutableEvents.resetReplayCache()
         logger.setLevel(LogLevel.INFO)
     }
 
@@ -1095,4 +1336,19 @@ public object Pyrx {
 
     /** Attribute key for the deep-link URI on the attribution event. */
     private const val KEY_ATTR_DEEP_LINK: String = "deep_link"
+
+    // MARK: - Observer constants (Phase 9.2.1) — sized for the cold-start
+    //         race window per D7. Some FCM data payloads include a synthetic
+    //         copy of the notification title / body under these flat keys
+    //         when the push is data-only; absent them, the observer payload
+    //         fields default to "". The OBSERVER_REPLAY / OBSERVER_EXTRA_BUFFER
+    //         values live on the `private companion object` near the top of
+    //         the file so the `mutableEvents` field initializer can reach
+    //         them at object-init time.
+
+    /** Intent-extra / FCM data key for [PushReceivedEvent.title]. */
+    private const val KEY_NOTIFICATION_TITLE: String = "title"
+
+    /** Intent-extra / FCM data key for [PushReceivedEvent.body]. */
+    private const val KEY_NOTIFICATION_BODY: String = "body"
 }
