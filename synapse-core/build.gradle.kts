@@ -15,7 +15,7 @@ plugins {
 }
 
 group = "tech.pyrx.synapse"
-version = "0.1.3"
+version = "0.1.4"
 
 android {
     namespace = "tech.pyrx.synapse"

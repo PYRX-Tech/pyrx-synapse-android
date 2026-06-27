@@ -10,6 +10,8 @@ Native Android SDK for the [PYRX Synapse](https://synapse.pyrx.tech) customer en
 
 Track events, identify users, register for FCM push, and respect user privacy — all from a single thread-safe `object` API designed for Jetpack Compose, View-based UI, and any Kotlin/Java host app on Android 5.0 (API 21) and newer.
 
+> **What's new in 0.1.4 (Phase 9.2.1):** first public **observer surface** on the SDK — `Pyrx.events: SharedFlow<PyrxEvent>`. Subscribe in `lifecycleScope` and observe push deliveries, taps, cold-start launches, queue drains, and identity transitions in real time. **5 events** in v1: `PushReceived`, `PushClicked`, `PushReceivedColdStart`, `QueueDrained`, `IdentityChanged(before, after)`. Multi-subscriber, replay buffer of 4 for the cold-start race. Cold-start vs. click dedup is JUnit-covered. See [docs/OBSERVERS.md](docs/OBSERVERS.md).
+
 ## Install
 
 `pyrx-synapse-android` ships as two Gradle artifacts so you only depend on what you use:
