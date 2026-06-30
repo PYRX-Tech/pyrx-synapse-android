@@ -8,8 +8,102 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-### Added
-- Full developer documentation set: README, Quickstart, API Reference, Push Setup, Migration, Releasing.
+---
+
+## [0.2.0] - 2026-06-30
+
+### Added — In-App Messaging surface (Phase 10 PR-2b)
+
+This release ports the browser SDK's in-app messaging surface (Phase 10
+PR-2a, shipped on the main `pyrx.synapse` repo as `8cd41496`) to
+Android. Wire-symmetric with the browser + iOS SDKs; same 10 lifecycle
+rules; same telemetry shape; idiomatic Kotlin idioms (coroutines,
+`SharedFlow`, `Mutex`).
+
+- **`tech.pyrx.synapse:synapse-inapp:0.2.0`** — new publishable module
+  (the empty Phase 8.4b placeholder activates with a real public surface).
+- **`Pyrx.inApp` namespace** — 5 suspend methods on the `Pyrx` singleton:
+  - `show(placement, callback): ShowToken` — register a render callback;
+    SDK invokes it per fresh + cached message; returns an
+    `AutoCloseable` token that unregisters on `close()`.
+  - `getActive(placement: String? = null): List<InAppMessage>` — sync
+    read of in-memory cache, sorted by priority desc, then expiry asc.
+  - `dismiss(messageId, reason: String? = null)` — evict from cache,
+    POST `/v1/in-app/log` (`event="dismissed"`), fire
+    `PyrxEvent.InAppMessageDismissed`. `reason` is observer-only;
+    does NOT cross the wire per ADR-0008 D2.
+  - `markInteracted(messageId, ctaId)` — POST `/v1/in-app/log`
+    (`event="interacted"`, `cta_id=<ctaId>`).
+  - `refresh()` — force an immediate poll; coalesces with any
+    in-flight poll via a single `Mutex` + `Deferred`.
+- **2 new `PyrxEvent` subtypes** (5 → 7, per ADR-0009 D5):
+  - `PyrxEvent.InAppMessageReceived(message)` — fires once per fresh
+    assignment id BEFORE the per-placement render callback runs.
+    Dedupe is per-identity (cleared on user-switch).
+  - `PyrxEvent.InAppMessageDismissed(messageId, reason)` — fires when
+    `Pyrx.inApp.dismiss` is called; reflects the call semantics, not
+    the cache state.
+- **Public types**: `InAppMessage`, `InAppCta`, `InAppCtaActionType`
+  (`DEEP_LINK` / `DISMISS` / `WEBVIEW` / `CALLBACK`), `ShowToken`,
+  `InAppRenderCallback` — all wire-symmetric with browser SDK's
+  `packages/sdk/src/types.ts`.
+- **`PyrxInApp.install(context)`** — entry point in the
+  `synapse-inapp` module that constructs the `InAppManager` and
+  installs the `InAppBridge` onto `Pyrx`. Apps that omit
+  `synapse-inapp` from their dependencies see warning logs + no-ops
+  on `Pyrx.inApp.*` calls instead of crashing (same UX as the push
+  bridge pattern).
+
+### Changed
+- **`synapse-core:0.1.4` → `0.2.0`**, **`synapse-push:0.1.4` →
+  `0.2.0`** (lockstep bump per Phase 9.2.1 precedent — additive
+  minor: new public types in `synapse-core`'s `inapp` package + 2
+  new `PyrxEvent` cases; `synapse-push` unchanged surface but
+  re-published for matrix consistency).
+- `PyrxEvent` sealed interface now closes over 7 subtypes — consumer
+  `when` blocks that omit `else -> { }` will get a compile-error
+  nudge to handle the 2 new cases. This is the documented
+  forward-compat policy (see `PyrxEvent.kt` file-level KDoc).
+- `Pyrx.emitIdentityChanged` notifies any installed `InAppBridge` via
+  `notifyIdentityChanged()` so the in-app manager can trigger an
+  immediate poll on null → identified transition (rule 2) and clear
+  its received-dedupe set on user-switch.
+
+### The 10 lifecycle rules (cross-SDK symmetric per PR #218)
+
+Preserved verbatim from the browser SDK:
+
+1. Identity-gated polling — no poll until `Pyrx.identify(...)`.
+2. Immediate poll on null → identified with placements registered.
+3. Track-call refresh within poll-interval window short-circuits.
+4. Concurrent poll coalescing (single in-flight `Mutex` + `Deferred`).
+5. Server-authoritative cache eviction.
+6. Received observer dedupes by assignment id.
+7. Auto-`markImpression` AFTER render callback returns (billable per
+   ADR-0008 D4).
+8. `soft_degraded: true` doubles polling interval (60s → 120s).
+9. `plan_limit_reached: true` still surfaces message + logs warning.
+10. NO widget code — data only; render callback receives
+    `InAppMessage`, host app draws the UI (PYRX UI Kit deferred to
+    Phase 10.x).
+
+### Tests
+- 32 new JUnit tests in `synapse-inapp` covering all 10 lifecycle
+  rules, telemetry wire shape, observer dedupe, soft-degrade backoff,
+  identity transitions, offline queue, render-callback isolation.
+- 5 new tests in `synapse-core/observer/InAppEventsTest` covering the
+  `PyrxEvent` 5 → 7 extension and exhaustive-`when` compile-time
+  guarantee for the new sum.
+- Total test count: 202 (up from 170 in 0.1.4).
+
+### Authority
+- [ADR-0008](https://github.com/PYRX-Tech/pyrx.synapse/blob/master/docs/adr/ADR-0008-in-app-messaging-delivery-model.md) — D1 pull delivery, D2 rendering-callback, D4 impression as billable.
+- [ADR-0009](https://github.com/PYRX-Tech/pyrx.synapse/blob/master/docs/adr/ADR-0009-in-app-sdk-surface.md) — D5 extends 5-event taxonomy to 7.
+- [Phase 10 plan](https://github.com/PYRX-Tech/pyrx.synapse/blob/master/docs/plans/phase-10-in-app-messaging-plan-2026-06-28.md) §2.3 Android rendering implications + §5 SDK Wire Shape.
+- Browser SDK reference: `packages/sdk/src/in-app.ts` (605 LOC) + `packages/sdk/tests/in-app.test.ts` (41 tests = behavior spec).
+
+### Unreleased docs roll-forward
+- Full developer documentation set: README, Quickstart, API Reference, Push Setup, Migration, Releasing (carried from 0.1.4 Unreleased buffer).
 - `docs/RELEASING.md` walkthrough for maintainers cutting future releases.
 
 ---

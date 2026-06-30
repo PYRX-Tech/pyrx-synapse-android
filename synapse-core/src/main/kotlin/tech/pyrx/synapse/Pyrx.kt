@@ -46,6 +46,9 @@ import kotlinx.coroutines.sync.withLock
 import tech.pyrx.synapse.events.EventsManager
 import tech.pyrx.synapse.identity.IdentityManager
 import tech.pyrx.synapse.identity.IdentityResult
+import tech.pyrx.synapse.inapp.InAppMessage
+import tech.pyrx.synapse.inapp.InAppRenderCallback
+import tech.pyrx.synapse.inapp.ShowToken
 import tech.pyrx.synapse.network.DeviceResponse
 import tech.pyrx.synapse.network.HTTPClient
 import tech.pyrx.synapse.network.HTTPSession
@@ -141,6 +144,22 @@ public object Pyrx {
      */
     @Volatile
     private var pushBridge: PushBridge? = null
+
+    /**
+     * Optional in-app bridge installed by the synapse-inapp module
+     * (Phase 10 PR-2b). Apps that don't depend on synapse-inapp leave
+     * this null; [inApp]'s methods log a warning and no-op when the
+     * bridge is missing rather than throwing — calling an in-app API
+     * from a non-inapp app should surface as a diagnostic in the log,
+     * not crash the host.
+     *
+     * The bridge is installed via [installInAppBridge] — typically
+     * called by synapse-inapp's `PyrxInApp.install(context)` either
+     * from `Application.onCreate` (explicit) or lazily on first use
+     * from a host-app composable / Activity.
+     */
+    @Volatile
+    private var inAppBridge: InAppBridge? = null
 
     /**
      * Application context captured at [initialize] time. Synapse-push reads
@@ -946,6 +965,283 @@ public object Pyrx {
         throw PyrxError.NotInitialized
     }
 
+    // MARK: - In-App Messaging API (Phase 10 PR-2b)
+    //
+    // Five-method public surface delegated to an installed [InAppBridge].
+    // The bridge is installed by the synapse-inapp module (see
+    // `synapse-inapp/.../PyrxInApp.install(context)`); apps that don't
+    // depend on synapse-inapp see warning logs and no-ops if they call
+    // these — same UX as calling a push API without synapse-push.
+    //
+    // The 10 lifecycle rules (cross-SDK symmetric per PR #218):
+    //   1. Identity-gated polling — no poll until `Pyrx.identify(...)`.
+    //   2. Immediate poll on null→identified transition with placements
+    //      registered (wired through `notifyIdentityChanged`).
+    //   3. Track-call refresh within the max-age window short-circuits.
+    //   4. Concurrent poll coalescing via single in-flight Mutex guard.
+    //   5. Server-authoritative cache (evict messages absent from latest).
+    //   6. Receive observer dedupes by assignment id.
+    //   7. Auto-`markImpression` AFTER the render callback returns.
+    //   8. `soft_degraded: true` doubles polling interval (60s → 120s).
+    //   9. `plan_limit_reached: true` still surfaces the message; warns.
+    //  10. NO widget code — data only. Render callback receives
+    //      `InAppMessage`; host app draws the UI (ADR-0008 D2).
+
+    /**
+     * In-app messaging namespace. The five public methods mirror the
+     * browser SDK's `synapse('inApp.*', ...)` facade (Phase 10 PR-2a,
+     * `packages/sdk/src/in-app.ts`) and iOS `Pyrx.inApp.*` shape per
+     * ADR-0009 D5.
+     *
+     * Every method delegates to an installed [InAppBridge]; if no
+     * bridge is installed (synapse-inapp not on the classpath), the
+     * method logs a warning and no-ops in a manner appropriate to its
+     * return shape — `show` returns a closed no-op token, `getActive`
+     * returns an empty list, the rest of the suspend methods return
+     * `Unit`. None throw on a missing bridge.
+     *
+     * Mirrors the browser surface 1:1 — `inApp.show(placement, cb) →
+     * ShowToken`, `inApp.getActive(placement?) → List<InAppMessage>`,
+     * `inApp.dismiss(id, reason?)`, `inApp.markInteracted(id, ctaId)`,
+     * `inApp.refresh()`.
+     *
+     * The lowercase `inApp` name (deviating from Kotlin's usual
+     * PascalCase for `object`) is intentional cross-SDK symmetry — the
+     * browser SDK's facade is `synapse('inApp.show', ...)` and the
+     * RN/Flutter wrappers will dispatch the same `inApp.*` namespace.
+     * `Pyrx.InApp.show(...)` would have broken every cross-SDK doc
+     * snippet and the muscle-memory of devs who moved from browser/
+     * iOS/RN to Android. Linters flag this; the `@Suppress` is a
+     * deliberate, documented exception, not laziness.
+     */
+    @Suppress("ClassNaming", "ClassOrdering")
+    public object inApp {
+        /**
+         * Register a render callback for [placement]. The SDK invokes the
+         * callback once per fresh message AND once per already-cached
+         * message at registration time (so a late-registering host
+         * doesn't miss messages from a prior poll).
+         *
+         * Triggers an immediate poll under the hood (rule 2 of the
+         * 10 lifecycle rules) if the SDK is already identified —
+         * otherwise the poll waits for the next identify (rule 1).
+         *
+         * @return A [ShowToken] (`AutoCloseable`) that unregisters the
+         *         callback when closed. Wire it into a lifecycle
+         *         observer that calls [ShowToken.close] in `onDestroy`
+         *         to avoid leaking the callback past the screen's life.
+         */
+        public fun show(
+            placement: String,
+            callback: InAppRenderCallback,
+        ): ShowToken {
+            val bridge = inAppBridge
+            if (bridge == null) {
+                logger.warning {
+                    "Pyrx.inApp.show: no in-app bridge installed — " +
+                        "did you forget to add synapse-inapp as a dependency?"
+                }
+                // Return an already-closed no-op token so callers can
+                // still use it idempotently in lifecycle code paths.
+                return ShowToken { /* no-op */ }
+            }
+            return bridge.show(placement = placement, callback = callback)
+        }
+
+        /**
+         * Sync read of currently-active messages from the in-memory
+         * cache. Optional [placement] filter narrows to one placement;
+         * `null` returns every cached message. Does NOT trigger a poll.
+         *
+         * Suspending because the bridge implementation may use a
+         * mutex-guarded read to coalesce with an in-flight poll;
+         * production reads return immediately.
+         *
+         * @return defensive copy sorted by priority desc, then expiry
+         *         asc (mirrors browser SDK getActive). Empty list when
+         *         no bridge installed.
+         */
+        public suspend fun getActive(placement: String? = null): List<InAppMessage> {
+            val bridge = inAppBridge
+            if (bridge == null) {
+                logger.warning {
+                    "Pyrx.inApp.getActive: no in-app bridge installed — " +
+                        "returning empty list."
+                }
+                return emptyList()
+            }
+            return bridge.getActive(placement)
+        }
+
+        /**
+         * Mark [messageId] dismissed. Evicts the message from the cache
+         * BEFORE the telemetry round-trip so subsequent `getActive`
+         * calls reflect the dismissal even while the POST is in flight.
+         * Fires the `dismissed` telemetry event (NON-billable per
+         * ADR-0008 D4) and emits [PyrxEvent.InAppMessageDismissed] on
+         * the observer stream.
+         *
+         * @param messageId Assignment id from [InAppMessage.id]. Safe to
+         *   call with an unknown id — the SDK still attempts the
+         *   telemetry POST (idempotent on the backend; 404 swallowed).
+         * @param reason Free-form host-side text — observer-only per
+         *   ADR-0008 D2 (PR-1 backend has no `reason` field and would
+         *   422 if we sent it). Reserved for forward-compat.
+         */
+        public suspend fun dismiss(
+            messageId: String,
+            reason: String? = null,
+        ) {
+            val bridge = inAppBridge
+            if (bridge == null) {
+                logger.warning {
+                    "Pyrx.inApp.dismiss: no in-app bridge installed — no-op."
+                }
+                return
+            }
+            bridge.dismiss(messageId = messageId, reason = reason)
+        }
+
+        /**
+         * Mark [messageId] interacted with [ctaId]. Fires the
+         * `interacted` telemetry event (NON-billable per ADR-0008 D4)
+         * with `cta_id` set.
+         *
+         * Does NOT evict the message from the cache — the host app
+         * decides whether interaction implies dismissal (a `DISMISS`-
+         * type CTA would call [dismiss] separately).
+         *
+         * Per ADR-0009 D5 there is NO `inAppMessageInteracted`
+         * observer event — the host app already knows when its own CTA
+         * was tapped (it triggered this call), so a separate observer
+         * would be redundant noise.
+         */
+        public suspend fun markInteracted(
+            messageId: String,
+            ctaId: String,
+        ) {
+            val bridge = inAppBridge
+            if (bridge == null) {
+                logger.warning {
+                    "Pyrx.inApp.markInteracted: no in-app bridge installed — no-op."
+                }
+                return
+            }
+            bridge.markInteracted(messageId = messageId, ctaId = ctaId)
+        }
+
+        /**
+         * Force an immediate poll. Coalesces with any in-flight poll
+         * (rule 4 — concurrent callers all await the same Promise /
+         * Deferred). No-op when no placements are registered or the
+         * SDK is not yet identified.
+         *
+         * Suspends until the poll completes (network round-trip +
+         * cache reconciliation + render-callback dispatch). Useful for
+         * pull-to-refresh UI affordances.
+         */
+        public suspend fun refresh() {
+            val bridge = inAppBridge
+            if (bridge == null) {
+                logger.warning {
+                    "Pyrx.inApp.refresh: no in-app bridge installed — no-op."
+                }
+                return
+            }
+            bridge.refresh()
+        }
+    }
+
+    /**
+     * Install the synapse-inapp module's [InAppBridge] implementation.
+     * Called by synapse-inapp's `PyrxInApp.install(context)`. Idempotent
+     * — re-installing the same bridge logs at info and is a no-op;
+     * re-installing a DIFFERENT bridge logs a warning and replaces the
+     * previous one.
+     *
+     * Public-but-bridge-only — host apps never call this directly.
+     * Marked `public` because synapse-inapp lives in a separate Gradle
+     * module and needs cross-module visibility.
+     */
+    public fun installInAppBridge(bridge: InAppBridge) {
+        val existing = inAppBridge
+        if (existing === bridge) {
+            logger.info { "installInAppBridge: identical bridge already installed — no-op." }
+            return
+        }
+        if (existing != null) {
+            logger.warning { "installInAppBridge: replacing existing bridge with a new one." }
+        }
+        inAppBridge = bridge
+        logger.info { "installInAppBridge: synapse-inapp bridge installed." }
+    }
+
+    /**
+     * Snapshot of internal state the synapse-inapp module needs to
+     * construct its [InAppBridge]. Returned by [inAppHooks]; null until
+     * [initialize] has completed.
+     *
+     * Public surface so synapse-inapp (separate Gradle module) can read
+     * it; host apps never instantiate this themselves.
+     *
+     * @property config Validated SDK config — carries workspaceId,
+     *   apiKey, baseUrl that the in-app endpoints (`/v1/in-app/poll`
+     *   and `/v1/in-app/log`) require on every request. The manager
+     *   pairs this with its own [tech.pyrx.synapse.network.HTTPSession]
+     *   (defaulting to [tech.pyrx.synapse.network.OkHttpSession]) so
+     *   the in-app polling timeouts can be tuned independently from
+     *   the main client without coupling the two.
+     * @property contactIdProvider Returns the SDK's resolved contact id
+     *   for `/v1/in-app/poll?contact_id=...` — externalId if set by
+     *   `identify`, otherwise `null` (the bridge refuses to poll
+     *   without an identified user per ADR-0008 D1).
+     * @property eventPublisher Forward the new in-app observer events
+     *   (`InAppMessageReceived` / `InAppMessageDismissed`) onto the
+     *   `Pyrx.events` SharedFlow. Plumbed as a lambda so the bridge
+     *   doesn't import [PyrxEvent] directly (it's a public type, so
+     *   it could, but the lambda lets us swap the implementation in
+     *   tests without touching the global singleton).
+     */
+    public data class PyrxInAppHooks(
+        val config: PyrxConfig,
+        val contactIdProvider: () -> String?,
+        val eventPublisher: (PyrxEvent) -> Unit,
+    )
+
+    /**
+     * Return the hooks synapse-inapp needs to construct its bridge.
+     * Returns null if [initialize] has not completed.
+     *
+     * Public for cross-module access; not part of the host-app contract.
+     */
+    public fun inAppHooks(): PyrxInAppHooks? {
+        val cfg = config ?: return null
+        return PyrxInAppHooks(
+            config = cfg,
+            contactIdProvider = ::resolveContactIdForInApp,
+            eventPublisher = ::publishEvent,
+        )
+    }
+
+    /**
+     * Resolve the active contact id for the in-app `/v1/in-app/poll`
+     * query param. Mirrors `track` / `screen` resolution: externalId
+     * from storage if present, else the cached anonymousId, else null.
+     *
+     * Returns null (rather than throwing) because the in-app bridge
+     * treats "no identity" as a soft signal — the manager pauses
+     * polling until a future identify lands. Mirrors browser SDK's
+     * `bound.userId == null` short-circuit in `executePoll`.
+     */
+    private fun resolveContactIdForInApp(): String? {
+        val store = storage ?: return null
+        val external = runCatchingStorage { store.get(PyrxStorageKey.EXTERNAL_ID) }
+        if (!external.isNullOrEmpty()) return external
+        val anon = anonymousId
+        if (!anon.isNullOrEmpty()) return anon
+        return null
+    }
+
     // MARK: - Privacy API (PR 5)
 
     /**
@@ -1183,10 +1479,19 @@ public object Pyrx {
      * snapshot and the freshly-read `after` snapshot. If the after-read
      * yields null (defensive — should not happen post-identify) we skip
      * emission rather than publish a malformed event.
+     *
+     * Also notifies any installed [InAppBridge] (Phase 10 PR-2b) so the
+     * in-app manager can trigger an immediate poll on null→identified
+     * transition with registered placements, and clear its
+     * received-dedupe set on user-switch. The bridge is allowed to
+     * call back into [Pyrx] to read the current identity — one-way
+     * coupling synapse-inapp → synapse-core is fine; the other way
+     * would be the cycle we structurally avoid via [InAppBridge].
      */
     private fun emitIdentityChanged(before: IdentitySnapshot?) {
         val after = currentIdentitySnapshot() ?: return
         publishEvent(PyrxEvent.IdentityChanged(before = before, after = after))
+        inAppBridge?.notifyIdentityChanged()
     }
 
     /**
@@ -1274,6 +1579,9 @@ public object Pyrx {
         pendingColdStartIntent = null
         appContext = null
         pushBridge = null
+        // Phase 10 PR-2b — clear any installed in-app bridge so tests
+        // re-installing a fresh bridge see a clean slate.
+        inAppBridge = null
         // Phase 9.2.1 — clear the cold-start dedup so cross-test pushLogId
         // entries from a previous test don't leak suppression state into
         // the next test. The SharedFlow replay buffer is intentionally
