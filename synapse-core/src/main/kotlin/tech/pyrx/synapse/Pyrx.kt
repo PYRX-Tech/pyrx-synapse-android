@@ -1014,7 +1014,7 @@ public object Pyrx {
      * iOS/RN to Android. Linters flag this; the `@Suppress` is a
      * deliberate, documented exception, not laziness.
      */
-    @Suppress("ClassNaming", "ClassOrdering")
+    @Suppress("ClassNaming", "ClassOrdering", "ktlint:standard:class-naming")
     public object inApp {
         /**
          * Register a render callback for [placement]. The SDK invokes the

@@ -25,15 +25,12 @@
 
 package tech.pyrx.synapse.inapp
 
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
-import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.encodeToString
@@ -50,7 +47,6 @@ import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
-import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 @OptIn(ExperimentalCoroutinesApi::class)
@@ -126,7 +122,9 @@ class InAppManagerTest {
             status: Int = 200,
         ) {
             logResponseBody =
-                """{"log_id":"log-1","billable":true,"plan_limit_reached":$planLimitReached,"soft_degraded":$softDegraded}"""
+                """{"log_id":"log-1","billable":true,""" +
+                """"plan_limit_reached":$planLimitReached,""" +
+                """"soft_degraded":$softDegraded}"""
             logStatus = status
         }
 
@@ -211,565 +209,601 @@ class InAppManagerTest {
     // ── Lifecycle Rule 1 — Identity-gated polling ──────────────────────────
 
     @Test
-    fun `does NOT poll before identify`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this, contactId = null)
+    fun `does NOT poll before identify`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this, contactId = null)
 
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        mgr.refresh()
-        advanceUntilIdle()
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            mgr.refresh()
+            advanceUntilIdle()
 
-        assertEquals(0, session.pollCallsCount(), "poll must be identity-gated")
-    }
-
-    @Test
-    fun `does NOT poll with no registered placements`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
-
-        mgr.refresh()
-        advanceUntilIdle()
-
-        assertEquals(0, session.pollCallsCount())
-    }
+            assertEquals(0, session.pollCallsCount(), "poll must be identity-gated")
+        }
 
     @Test
-    fun `polls poll path with contact_id and placement query params`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
+    fun `does NOT poll with no registered placements`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
 
-        val pollCall = session.calls.first { (url, _) -> url.contains(InAppManager.POLL_PATH) }
-        assertTrue(pollCall.first.contains("/v1/in-app/poll"))
-        assertTrue(pollCall.first.contains("contact_id=contact-abc"))
-        assertTrue(pollCall.first.contains("placement=home_banner"))
-    }
+            mgr.refresh()
+            advanceUntilIdle()
+
+            assertEquals(0, session.pollCallsCount())
+        }
 
     @Test
-    fun `passes multiple placement keys as REPEATED query params not joined`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
-        mgr.show("home_banner") { /* no-op */ }
-        mgr.show("settings_modal") { /* no-op */ }
-        advanceUntilIdle()
-        session.reset()
+    fun `polls poll path with contact_id and placement query params`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
 
-        mgr.refresh()
-        advanceUntilIdle()
+            val pollCall = session.calls.first { (url, _) -> url.contains(InAppManager.POLL_PATH) }
+            assertTrue(pollCall.first.contains("/v1/in-app/poll"))
+            assertTrue(pollCall.first.contains("contact_id=contact-abc"))
+            assertTrue(pollCall.first.contains("placement=home_banner"))
+        }
 
-        val pollCall = session.calls.first { (url, _) -> url.contains(InAppManager.POLL_PATH) }
-        val url = pollCall.first
-        // Two placement= params present, NOT comma-joined.
-        val placementParamsCount = url.split("&").count { it.startsWith("placement=") }
-        assertEquals(2, placementParamsCount, "placement params must be repeated, not comma-joined")
-        assertTrue(url.contains("placement=home_banner"))
-        assertTrue(url.contains("placement=settings_modal"))
-    }
+    @Test
+    fun `passes multiple placement keys as REPEATED query params not joined`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
+            mgr.show("home_banner") { /* no-op */ }
+            mgr.show("settings_modal") { /* no-op */ }
+            advanceUntilIdle()
+            session.reset()
+
+            mgr.refresh()
+            advanceUntilIdle()
+
+            val pollCall = session.calls.first { (url, _) -> url.contains(InAppManager.POLL_PATH) }
+            val url = pollCall.first
+            // Two placement= params present, NOT comma-joined.
+            val placementParamsCount = url.split("&").count { it.startsWith("placement=") }
+            assertEquals(2, placementParamsCount, "placement params must be repeated, not comma-joined")
+            assertTrue(url.contains("placement=home_banner"))
+            assertTrue(url.contains("placement=settings_modal"))
+        }
 
     // ── Lifecycle Rule 4 — Concurrent poll coalescing ──────────────────────
 
     @Test
-    fun `coalesces concurrent polls into a single in-flight request`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        session.reset()
+    fun `coalesces concurrent polls into a single in-flight request`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            session.reset()
 
-        // Three concurrent refreshes — manager coalesces via Mutex+Deferred.
-        val deferreds = listOf(
-            async { mgr.refresh() },
-            async { mgr.refresh() },
-            async { mgr.refresh() },
-        )
-        deferreds.awaitAll()
-        advanceUntilIdle()
+            // Three concurrent refreshes — manager coalesces via Mutex+Deferred.
+            val deferreds =
+                listOf(
+                    async { mgr.refresh() },
+                    async { mgr.refresh() },
+                    async { mgr.refresh() },
+                )
+            deferreds.awaitAll()
+            advanceUntilIdle()
 
-        assertEquals(1, session.pollCallsCount(), "concurrent polls must coalesce into one request")
-    }
+            assertEquals(1, session.pollCallsCount(), "concurrent polls must coalesce into one request")
+        }
 
     // ── Network resilience ─────────────────────────────────────────────────
 
     @Test
-    fun `survives network errors gracefully keeps last-cached messages`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "assign-cached")))
-        val mgr = makeManager(session = session, scope = this)
+    fun `survives network errors gracefully keeps last-cached messages`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "assign-cached")))
+            val mgr = makeManager(session = session, scope = this)
 
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        assertEquals(1, mgr.getActiveCountForTests())
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            assertEquals(1, mgr.getActiveCountForTests())
 
-        // Force the next poll to fail.
-        session.failNextCount = 1
-        mgr.refresh()
-        advanceUntilIdle()
+            // Force the next poll to fail.
+            session.failNextCount = 1
+            mgr.refresh()
+            advanceUntilIdle()
 
-        // Cache preserved (not replaced with empty response).
-        assertEquals(1, mgr.getActiveCountForTests())
-    }
+            // Cache preserved (not replaced with empty response).
+            assertEquals(1, mgr.getActiveCountForTests())
+        }
 
     // ── Render callbacks (ADR-0008 D2) ─────────────────────────────────────
 
     @Test
-    fun `dispatches a fresh message to the registered placement callback`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "assign-fresh", placement = "home_banner")))
-        val mgr = makeManager(session = session, scope = this)
+    fun `dispatches a fresh message to the registered placement callback`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "assign-fresh", placement = "home_banner")))
+            val mgr = makeManager(session = session, scope = this)
 
-        val received = mutableListOf<InAppMessage>()
-        mgr.show("home_banner") { msg -> received.add(msg) }
-        advanceUntilIdle()
+            val received = mutableListOf<InAppMessage>()
+            mgr.show("home_banner") { msg -> received.add(msg) }
+            advanceUntilIdle()
 
-        assertEquals(1, received.size)
-        assertEquals("assign-fresh", received[0].id)
-    }
+            assertEquals(1, received.size)
+            assertEquals("assign-fresh", received[0].id)
+        }
 
     @Test
-    fun `does NOT re-dispatch the same message on a subsequent poll`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "assign-stable")))
-        val mgr = makeManager(session = session, scope = this)
+    fun `does NOT re-dispatch the same message on a subsequent poll`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "assign-stable")))
+            val mgr = makeManager(session = session, scope = this)
 
-        val received = mutableListOf<InAppMessage>()
-        mgr.show("home_banner") { msg -> received.add(msg) }
-        advanceUntilIdle()
-        mgr.refresh()
-        advanceUntilIdle()
-        mgr.refresh()
-        advanceUntilIdle()
+            val received = mutableListOf<InAppMessage>()
+            mgr.show("home_banner") { msg -> received.add(msg) }
+            advanceUntilIdle()
+            mgr.refresh()
+            advanceUntilIdle()
+            mgr.refresh()
+            advanceUntilIdle()
 
-        assertEquals(1, received.size, "dedupe by assignment id (rule 6)")
-    }
+            assertEquals(1, received.size, "dedupe by assignment id (rule 6)")
+        }
 
     // ── Lifecycle Rule 7 — Auto-impression ─────────────────────────────────
 
     @Test
-    fun `auto-fires markImpression after the render callback returns`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "assign-impress")))
-        val mgr = makeManager(session = session, scope = this)
+    fun `auto-fires markImpression after the render callback returns`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "assign-impress")))
+            val mgr = makeManager(session = session, scope = this)
 
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
 
-        val lastLog = session.lastLogCall()
-        assertNotNull(lastLog, "auto-impression POST must have fired")
-        val bodyStr = lastLog.second.toString(Charsets.UTF_8)
-        assertTrue(bodyStr.contains("\"assignment_id\":\"assign-impress\""), "body: $bodyStr")
-        assertTrue(bodyStr.contains("\"event\":\"impressed\""), "body: $bodyStr")
-    }
-
-    @Test
-    fun `isolates host-app exceptions thrown inside the render callback`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "assign-explode")))
-        val mgr = makeManager(session = session, scope = this)
-
-        // Callback throws — manager must catch + log + continue.
-        mgr.show("home_banner") { _ -> throw RuntimeException("host app blew up") }
-        // No crash — advanceUntilIdle settles without throwing out.
-        advanceUntilIdle()
-        // Auto-impression still fires (callback caught, manager kept going).
-        assertEquals(1, session.logCallsCount())
-    }
+            val lastLog = session.lastLogCall()
+            assertNotNull(lastLog, "auto-impression POST must have fired")
+            val bodyStr = lastLog.second.toString(Charsets.UTF_8)
+            assertTrue(bodyStr.contains("\"assignment_id\":\"assign-impress\""), "body: $bodyStr")
+            assertTrue(bodyStr.contains("\"event\":\"impressed\""), "body: $bodyStr")
+        }
 
     @Test
-    fun `does NOT dispatch a message to a callback for a different placement`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(
-            listOf(
-                makeMessage(id = "a-home", placement = "home_banner"),
-                makeMessage(id = "a-modal", placement = "settings_modal"),
-            ),
-        )
-        val mgr = makeManager(session = session, scope = this)
+    fun `isolates host-app exceptions thrown inside the render callback`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "assign-explode")))
+            val mgr = makeManager(session = session, scope = this)
 
-        val home = mutableListOf<InAppMessage>()
-        val modal = mutableListOf<InAppMessage>()
-        mgr.show("home_banner") { msg -> home.add(msg) }
-        mgr.show("settings_modal") { msg -> modal.add(msg) }
-        advanceUntilIdle()
-
-        assertEquals(listOf("a-home"), home.map { it.id })
-        assertEquals(listOf("a-modal"), modal.map { it.id })
-    }
+            // Callback throws — manager must catch + log + continue.
+            // Using IllegalStateException (specific) instead of RuntimeException
+            // (generic) per detekt's TooGenericExceptionThrown rule — semantics
+            // identical for the catch-anything behavior being tested.
+            mgr.show("home_banner") { _ -> throw IllegalStateException("host app blew up") }
+            // No crash — advanceUntilIdle settles without throwing out.
+            advanceUntilIdle()
+            // Auto-impression still fires (callback caught, manager kept going).
+            assertEquals(1, session.logCallsCount())
+        }
 
     @Test
-    fun `replays already-cached messages when a SECOND callback registers for an existing placement`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "assign-replay")))
-        val mgr = makeManager(session = session, scope = this)
+    fun `does NOT dispatch a message to a callback for a different placement`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(
+                listOf(
+                    makeMessage(id = "a-home", placement = "home_banner"),
+                    makeMessage(id = "a-modal", placement = "settings_modal"),
+                ),
+            )
+            val mgr = makeManager(session = session, scope = this)
 
-        mgr.show("home_banner") { /* first callback drives initial poll */ }
-        advanceUntilIdle()
-        assertEquals(1, mgr.getActiveCountForTests())
+            val home = mutableListOf<InAppMessage>()
+            val modal = mutableListOf<InAppMessage>()
+            mgr.show("home_banner") { msg -> home.add(msg) }
+            mgr.show("settings_modal") { msg -> modal.add(msg) }
+            advanceUntilIdle()
 
-        // Second callback registers AFTER cache populated — replay.
-        val replayed = mutableListOf<InAppMessage>()
-        mgr.show("home_banner") { msg -> replayed.add(msg) }
-        advanceUntilIdle()
-
-        assertEquals(1, replayed.size)
-        assertEquals("assign-replay", replayed[0].id)
-    }
+            assertEquals(listOf("a-home"), home.map { it.id })
+            assertEquals(listOf("a-modal"), modal.map { it.id })
+        }
 
     @Test
-    fun `show with blank placement returns a no-op token without throwing`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
+    fun `replays already-cached messages when a SECOND callback registers for an existing placement`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "assign-replay")))
+            val mgr = makeManager(session = session, scope = this)
 
-        // No throw; returns a closeable that does nothing.
-        val token = mgr.show("") { /* no-op */ }
-        token.close()
-        advanceUntilIdle()
-        assertEquals(0, session.pollCallsCount())
-    }
+            mgr.show("home_banner") { /* first callback drives initial poll */ }
+            advanceUntilIdle()
+            assertEquals(1, mgr.getActiveCountForTests())
+
+            // Second callback registers AFTER cache populated — replay.
+            val replayed = mutableListOf<InAppMessage>()
+            mgr.show("home_banner") { msg -> replayed.add(msg) }
+            advanceUntilIdle()
+
+            assertEquals(1, replayed.size)
+            assertEquals("assign-replay", replayed[0].id)
+        }
+
+    @Test
+    fun `show with blank placement returns a no-op token without throwing`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
+
+            // No throw; returns a closeable that does nothing.
+            val token = mgr.show("") { /* no-op */ }
+            token.close()
+            advanceUntilIdle()
+            assertEquals(0, session.pollCallsCount())
+        }
 
     // ── getActive ──────────────────────────────────────────────────────────
 
     @Test
-    fun `getActive returns a sorted copy priority desc then expiry asc`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(
-            listOf(
-                makeMessage(id = "low", priority = 1),
-                makeMessage(id = "high", priority = 10),
-                makeMessage(id = "mid", priority = 5),
-            ),
-        )
-        val mgr = makeManager(session = session, scope = this)
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
+    fun `getActive returns a sorted copy priority desc then expiry asc`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(
+                listOf(
+                    makeMessage(id = "low", priority = 1),
+                    makeMessage(id = "high", priority = 10),
+                    makeMessage(id = "mid", priority = 5),
+                ),
+            )
+            val mgr = makeManager(session = session, scope = this)
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
 
-        val order = mgr.getActive(null).map { it.id }
-        assertEquals(listOf("high", "mid", "low"), order)
-    }
-
-    @Test
-    fun `getActive filters by placement when supplied`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(
-            listOf(
-                makeMessage(id = "a", placement = "home_banner"),
-                makeMessage(id = "b", placement = "settings_modal"),
-            ),
-        )
-        val mgr = makeManager(session = session, scope = this)
-        mgr.show("home_banner") { /* no-op */ }
-        mgr.show("settings_modal") { /* no-op */ }
-        advanceUntilIdle()
-
-        assertEquals(listOf("a"), mgr.getActive("home_banner").map { it.id })
-        assertEquals(listOf("b"), mgr.getActive("settings_modal").map { it.id })
-    }
+            val order = mgr.getActive(null).map { it.id }
+            assertEquals(listOf("high", "mid", "low"), order)
+        }
 
     @Test
-    fun `getActive returns empty when no activity has occurred`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
-        assertEquals(emptyList(), mgr.getActive(null))
-    }
+    fun `getActive filters by placement when supplied`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(
+                listOf(
+                    makeMessage(id = "a", placement = "home_banner"),
+                    makeMessage(id = "b", placement = "settings_modal"),
+                ),
+            )
+            val mgr = makeManager(session = session, scope = this)
+            mgr.show("home_banner") { /* no-op */ }
+            mgr.show("settings_modal") { /* no-op */ }
+            advanceUntilIdle()
+
+            assertEquals(listOf("a"), mgr.getActive("home_banner").map { it.id })
+            assertEquals(listOf("b"), mgr.getActive("settings_modal").map { it.id })
+        }
+
+    @Test
+    fun `getActive returns empty when no activity has occurred`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
+            assertEquals(emptyList(), mgr.getActive(null))
+        }
 
     // ── dismiss ────────────────────────────────────────────────────────────
 
     @Test
-    fun `dismiss evicts the message and POSTs log with event=dismissed`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "assign-dismiss")))
-        val mgr = makeManager(session = session, scope = this)
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        assertEquals(1, mgr.getActiveCountForTests())
+    fun `dismiss evicts the message and POSTs log with event=dismissed`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "assign-dismiss")))
+            val mgr = makeManager(session = session, scope = this)
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            assertEquals(1, mgr.getActiveCountForTests())
 
-        session.reset()
-        mgr.dismiss("assign-dismiss", "user_dismissed")
-        advanceUntilIdle()
+            session.reset()
+            mgr.dismiss("assign-dismiss", "user_dismissed")
+            advanceUntilIdle()
 
-        assertEquals(0, mgr.getActiveCountForTests())
-        val lastLog = session.lastLogCall()
-        assertNotNull(lastLog)
-        val bodyStr = lastLog.second.toString(Charsets.UTF_8)
-        assertTrue(bodyStr.contains("\"assignment_id\":\"assign-dismiss\""))
-        assertTrue(bodyStr.contains("\"event\":\"dismissed\""))
-        // Reason MUST NOT cross the wire per ADR-0008 D2.
-        assertTrue(!bodyStr.contains("user_dismissed"), "reason must not be sent: $bodyStr")
-    }
-
-    @Test
-    fun `dismiss fires the InAppMessageDismissed observer with the host-supplied reason`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val events = mutableListOf<PyrxEvent>()
-        val mgr = makeManager(session = session, scope = this, events = events)
-
-        mgr.dismiss("assign-x", "user_dismissed")
-        advanceUntilIdle()
-
-        val dismissEv = events.filterIsInstance<PyrxEvent.InAppMessageDismissed>().firstOrNull()
-        assertNotNull(dismissEv, "InAppMessageDismissed must fire")
-        assertEquals("assign-x", dismissEv.messageId)
-        assertEquals("user_dismissed", dismissEv.reason)
-    }
+            assertEquals(0, mgr.getActiveCountForTests())
+            val lastLog = session.lastLogCall()
+            assertNotNull(lastLog)
+            val bodyStr = lastLog.second.toString(Charsets.UTF_8)
+            assertTrue(bodyStr.contains("\"assignment_id\":\"assign-dismiss\""))
+            assertTrue(bodyStr.contains("\"event\":\"dismissed\""))
+            // Reason MUST NOT cross the wire per ADR-0008 D2.
+            assertTrue(!bodyStr.contains("user_dismissed"), "reason must not be sent: $bodyStr")
+        }
 
     @Test
-    fun `dismiss with blank messageId is a no-op no network call`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
+    fun `dismiss fires the InAppMessageDismissed observer with the host-supplied reason`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val events = mutableListOf<PyrxEvent>()
+            val mgr = makeManager(session = session, scope = this, events = events)
 
-        mgr.dismiss("", null)
-        advanceUntilIdle()
-        assertEquals(0, session.calls.size)
-    }
+            mgr.dismiss("assign-x", "user_dismissed")
+            advanceUntilIdle()
+
+            val dismissEv = events.filterIsInstance<PyrxEvent.InAppMessageDismissed>().firstOrNull()
+            assertNotNull(dismissEv, "InAppMessageDismissed must fire")
+            assertEquals("assign-x", dismissEv.messageId)
+            assertEquals("user_dismissed", dismissEv.reason)
+        }
+
+    @Test
+    fun `dismiss with blank messageId is a no-op no network call`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
+
+            mgr.dismiss("", null)
+            advanceUntilIdle()
+            assertEquals(0, session.calls.size)
+        }
 
     // ── markInteracted ─────────────────────────────────────────────────────
 
     @Test
-    fun `markInteracted POSTs log with event=interacted and cta_id`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
+    fun `markInteracted POSTs log with event=interacted and cta_id`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
 
-        mgr.markInteracted("assign-i", "cta-primary")
-        advanceUntilIdle()
+            mgr.markInteracted("assign-i", "cta-primary")
+            advanceUntilIdle()
 
-        val lastLog = session.lastLogCall()
-        assertNotNull(lastLog)
-        val bodyStr = lastLog.second.toString(Charsets.UTF_8)
-        assertTrue(bodyStr.contains("\"assignment_id\":\"assign-i\""))
-        assertTrue(bodyStr.contains("\"event\":\"interacted\""))
-        assertTrue(bodyStr.contains("\"cta_id\":\"cta-primary\""))
-    }
+            val lastLog = session.lastLogCall()
+            assertNotNull(lastLog)
+            val bodyStr = lastLog.second.toString(Charsets.UTF_8)
+            assertTrue(bodyStr.contains("\"assignment_id\":\"assign-i\""))
+            assertTrue(bodyStr.contains("\"event\":\"interacted\""))
+            assertTrue(bodyStr.contains("\"cta_id\":\"cta-primary\""))
+        }
 
     @Test
-    fun `markInteracted rejects blank ctaId client-side no round-trip`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
+    fun `markInteracted rejects blank ctaId client-side no round-trip`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
 
-        mgr.markInteracted("assign-i", "")
-        advanceUntilIdle()
-        assertEquals(0, session.calls.size)
-    }
+            mgr.markInteracted("assign-i", "")
+            advanceUntilIdle()
+            assertEquals(0, session.calls.size)
+        }
 
     // ── Observer events (ADR-0009 D5) ──────────────────────────────────────
 
     @Test
-    fun `fires InAppMessageReceived once per new assignment id`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "a"), makeMessage(id = "b")))
-        val events = mutableListOf<PyrxEvent>()
-        val mgr = makeManager(session = session, scope = this, events = events)
+    fun `fires InAppMessageReceived once per new assignment id`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "a"), makeMessage(id = "b")))
+            val events = mutableListOf<PyrxEvent>()
+            val mgr = makeManager(session = session, scope = this, events = events)
 
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        mgr.refresh()
-        advanceUntilIdle()
-        mgr.refresh()
-        advanceUntilIdle()
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            mgr.refresh()
+            advanceUntilIdle()
+            mgr.refresh()
+            advanceUntilIdle()
 
-        val received = events.filterIsInstance<PyrxEvent.InAppMessageReceived>().map { it.message.id }
-        assertEquals(listOf("a", "b"), received)
-    }
+            val received = events.filterIsInstance<PyrxEvent.InAppMessageReceived>().map { it.message.id }
+            assertEquals(listOf("a", "b"), received)
+        }
 
     // ── Cache eviction (rule 5 — server-authoritative) ─────────────────────
 
     @Test
-    fun `evicts messages no longer present in poll response`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "a"), makeMessage(id = "b")))
-        val mgr = makeManager(session = session, scope = this)
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        assertEquals(2, mgr.getActiveCountForTests())
+    fun `evicts messages no longer present in poll response`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "a"), makeMessage(id = "b")))
+            val mgr = makeManager(session = session, scope = this)
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            assertEquals(2, mgr.getActiveCountForTests())
 
-        // Backend drops "a" (expiry / frequency cap / segment change).
-        session.setPollMessages(listOf(makeMessage(id = "b")))
-        mgr.refresh()
-        advanceUntilIdle()
+            // Backend drops "a" (expiry / frequency cap / segment change).
+            session.setPollMessages(listOf(makeMessage(id = "b")))
+            mgr.refresh()
+            advanceUntilIdle()
 
-        assertEquals(listOf("b"), mgr.getActive(null).map { it.id })
-    }
+            assertEquals(listOf("b"), mgr.getActive(null).map { it.id })
+        }
 
     // ── Soft-degrade backoff (rule 8) ──────────────────────────────────────
 
     @Test
-    fun `soft_degraded=true doubles poll interval`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "imp-1")))
-        session.setLogResponse(softDegraded = true)
-        val mgr = makeManager(session = session, scope = this)
+    fun `soft_degraded=true doubles poll interval`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "imp-1")))
+            session.setLogResponse(softDegraded = true)
+            val mgr = makeManager(session = session, scope = this)
 
-        assertEquals(60_000L, mgr.getPollIntervalForTests())
+            assertEquals(60_000L, mgr.getPollIntervalForTests())
 
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
 
-        assertEquals(120_000L, mgr.getPollIntervalForTests(), "soft_degraded must double the interval")
-    }
-
-    @Test
-    fun `recovers to default interval when soft_degraded clears`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "m1")))
-        session.setLogResponse(softDegraded = true)
-        val mgr = makeManager(session = session, scope = this)
-
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        assertEquals(120_000L, mgr.getPollIntervalForTests())
-
-        // Phase 2 — new message, clean response.
-        session.setPollMessages(listOf(makeMessage(id = "m1"), makeMessage(id = "m2")))
-        session.setLogResponse(softDegraded = false)
-        mgr.refresh()
-        advanceUntilIdle()
-
-        assertEquals(60_000L, mgr.getPollIntervalForTests(), "clean response must reset interval")
-    }
+            assertEquals(120_000L, mgr.getPollIntervalForTests(), "soft_degraded must double the interval")
+        }
 
     @Test
-    fun `plan_limit_reached still surfaces the message and emits debug log warning`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "at-cap")))
-        session.setLogResponse(planLimitReached = true, softDegraded = true)
-        val logs = mutableListOf<String>()
-        val mgr = makeManager(session = session, scope = this, logs = logs)
+    fun `recovers to default interval when soft_degraded clears`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "m1")))
+            session.setLogResponse(softDegraded = true)
+            val mgr = makeManager(session = session, scope = this)
 
-        val rendered = mutableListOf<InAppMessage>()
-        mgr.show("home_banner") { msg -> rendered.add(msg) }
-        advanceUntilIdle()
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            assertEquals(120_000L, mgr.getPollIntervalForTests())
 
-        // Host still saw the message (callback fired BEFORE the log POST returned).
-        assertEquals(1, rendered.size, "plan_limit_reached must NOT suppress the host callback")
-        // Debug log surfaces the plan-limit warning.
-        assertTrue(
-            logs.any { it.contains("plan_limit_reached") },
-            "expected plan_limit_reached log; got: $logs",
-        )
-    }
+            // Phase 2 — new message, clean response.
+            session.setPollMessages(listOf(makeMessage(id = "m1"), makeMessage(id = "m2")))
+            session.setLogResponse(softDegraded = false)
+            mgr.refresh()
+            advanceUntilIdle()
+
+            assertEquals(60_000L, mgr.getPollIntervalForTests(), "clean response must reset interval")
+        }
+
+    @Test
+    fun `plan_limit_reached still surfaces the message and emits debug log warning`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "at-cap")))
+            session.setLogResponse(planLimitReached = true, softDegraded = true)
+            val logs = mutableListOf<String>()
+            val mgr = makeManager(session = session, scope = this, logs = logs)
+
+            val rendered = mutableListOf<InAppMessage>()
+            mgr.show("home_banner") { msg -> rendered.add(msg) }
+            advanceUntilIdle()
+
+            // Host still saw the message (callback fired BEFORE the log POST returned).
+            assertEquals(1, rendered.size, "plan_limit_reached must NOT suppress the host callback")
+            // Debug log surfaces the plan-limit warning.
+            assertTrue(
+                logs.any { it.contains("plan_limit_reached") },
+                "expected plan_limit_reached log; got: $logs",
+            )
+        }
 
     // ── Offline queue ──────────────────────────────────────────────────────
 
     @Test
-    fun `queues telemetry on network failure for later retry`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
+    fun `queues telemetry on network failure for later retry`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
 
-        // Force the log POST to fail.
-        session.failNextCount = 1
-        session.failLogOnly = true
-        mgr.dismiss("assign-offline", null)
-        advanceUntilIdle()
+            // Force the log POST to fail.
+            session.failNextCount = 1
+            session.failLogOnly = true
+            mgr.dismiss("assign-offline", null)
+            advanceUntilIdle()
 
-        assertEquals(1, mgr.getQueuedLogsForTests().size, "failed log must queue for retry")
-    }
+            assertEquals(1, mgr.getQueuedLogsForTests().size, "failed log must queue for retry")
+        }
 
     @Test
-    fun `queues telemetry on 5xx and drops on 4xx`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
+    fun `queues telemetry on 5xx and drops on 4xx`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
 
-        // 4xx — permanent failure, dropped.
-        session.logStatus = 422
-        mgr.dismiss("assign-4xx", null)
-        advanceUntilIdle()
-        assertEquals(0, mgr.getQueuedLogsForTests().size)
+            // 4xx — permanent failure, dropped.
+            session.logStatus = 422
+            mgr.dismiss("assign-4xx", null)
+            advanceUntilIdle()
+            assertEquals(0, mgr.getQueuedLogsForTests().size)
 
-        // 5xx — transient, queued.
-        session.logStatus = 503
-        mgr.dismiss("assign-5xx", null)
-        advanceUntilIdle()
-        assertEquals(1, mgr.getQueuedLogsForTests().size)
-    }
+            // 5xx — transient, queued.
+            session.logStatus = 503
+            mgr.dismiss("assign-5xx", null)
+            advanceUntilIdle()
+            assertEquals(1, mgr.getQueuedLogsForTests().size)
+        }
 
     // ── Identity transition (rule 2) ───────────────────────────────────────
 
     @Test
-    fun `triggers immediate poll when identity transitions from null to set with placements`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        var currentContactId: String? = null
-        val mgrScope =
-            kotlinx.coroutines.CoroutineScope(
-                SupervisorJob() + StandardTestDispatcher(this.testScheduler),
-            )
-        val mgr =
-            InAppManager(
-                config = makeConfig(),
-                session = session,
-                contactIdProvider = { currentContactId },
-                eventPublisher = { /* no-op */ },
-                logger = { /* no-op */ },
-                json = testJson,
-                scope = mgrScope,
-                nowMillis = { this.testScheduler.currentTime },
-                defaultPollIntervalMillis = 60_000L,
-                enableBackgroundTimer = false,
-            )
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        assertEquals(0, session.pollCallsCount(), "no poll before identity")
+    fun `triggers immediate poll when identity transitions from null to set with placements`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            var currentContactId: String? = null
+            val mgrScope =
+                kotlinx.coroutines.CoroutineScope(
+                    SupervisorJob() + StandardTestDispatcher(this.testScheduler),
+                )
+            val mgr =
+                InAppManager(
+                    config = makeConfig(),
+                    session = session,
+                    contactIdProvider = { currentContactId },
+                    eventPublisher = { /* no-op */ },
+                    logger = { /* no-op */ },
+                    json = testJson,
+                    scope = mgrScope,
+                    nowMillis = { this.testScheduler.currentTime },
+                    defaultPollIntervalMillis = 60_000L,
+                    enableBackgroundTimer = false,
+                )
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            assertEquals(0, session.pollCallsCount(), "no poll before identity")
 
-        // Identity lands.
-        currentContactId = "freshly-identified"
-        mgr.notifyIdentityChanged()
-        advanceUntilIdle()
+            // Identity lands.
+            currentContactId = "freshly-identified"
+            mgr.notifyIdentityChanged()
+            advanceUntilIdle()
 
-        assertTrue(session.pollCallsCount() >= 1, "identity arrival must kick a poll")
-        val pollUrl = session.calls.first { (url, _) -> url.contains(InAppManager.POLL_PATH) }.first
-        assertTrue(pollUrl.contains("contact_id=freshly-identified"))
-    }
+            assertTrue(session.pollCallsCount() >= 1, "identity arrival must kick a poll")
+            val pollUrl = session.calls.first { (url, _) -> url.contains(InAppManager.POLL_PATH) }.first
+            assertTrue(pollUrl.contains("contact_id=freshly-identified"))
+        }
 
     // ── Track-call refresh window (rule 3) ─────────────────────────────────
 
     @Test
-    fun `notifyTracked within the poll-interval window does NOT fire a poll`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        val mgr = makeManager(session = session, scope = this)
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        session.reset()
+    fun `notifyTracked within the poll-interval window does NOT fire a poll`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            val mgr = makeManager(session = session, scope = this)
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            session.reset()
 
-        // Immediate track call — lastPollAt is "just now"; should short-circuit.
-        mgr.notifyTracked()
-        advanceUntilIdle()
+            // Immediate track call — lastPollAt is "just now"; should short-circuit.
+            mgr.notifyTracked()
+            advanceUntilIdle()
 
-        assertEquals(0, session.pollCallsCount(), "track call within window must short-circuit")
-    }
+            assertEquals(0, session.pollCallsCount(), "track call within window must short-circuit")
+        }
 
     // ── Lifecycle: shutdown ────────────────────────────────────────────────
 
     @Test
-    fun `shutdown stops accepting new work and does not break previously-cached reads`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "m1")))
-        val mgr = makeManager(session = session, scope = this)
-        mgr.show("home_banner") { /* no-op */ }
-        advanceUntilIdle()
-        assertEquals(1, mgr.getActiveCountForTests())
+    fun `shutdown stops accepting new work and does not break previously-cached reads`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "m1")))
+            val mgr = makeManager(session = session, scope = this)
+            mgr.show("home_banner") { /* no-op */ }
+            advanceUntilIdle()
+            assertEquals(1, mgr.getActiveCountForTests())
 
-        mgr.shutdown()
-        // After shutdown the cache snapshot is still readable — shutdown
-        // only cancels background work, not the manager's in-memory
-        // state. Production callers can construct a fresh manager to
-        // resume polling.
-        assertEquals(1, mgr.getActiveCountForTests(), "cache survives shutdown for last-read")
-    }
+            mgr.shutdown()
+            // After shutdown the cache snapshot is still readable — shutdown
+            // only cancels background work, not the manager's in-memory
+            // state. Production callers can construct a fresh manager to
+            // resume polling.
+            assertEquals(1, mgr.getActiveCountForTests(), "cache survives shutdown for last-read")
+        }
 
     // ── ShowToken close unregisters callback ───────────────────────────────
 
     @Test
-    fun `ShowToken close unregisters the callback`() = runTest {
-        val session = FakeHTTPSession(testJson)
-        session.setPollMessages(listOf(makeMessage(id = "m1")))
-        val mgr = makeManager(session = session, scope = this)
+    fun `ShowToken close unregisters the callback`() =
+        runTest {
+            val session = FakeHTTPSession(testJson)
+            session.setPollMessages(listOf(makeMessage(id = "m1")))
+            val mgr = makeManager(session = session, scope = this)
 
-        val received = mutableListOf<InAppMessage>()
-        val token = mgr.show("home_banner") { msg -> received.add(msg) }
-        advanceUntilIdle()
-        assertEquals(1, received.size, "initial render")
+            val received = mutableListOf<InAppMessage>()
+            val token = mgr.show("home_banner") { msg -> received.add(msg) }
+            advanceUntilIdle()
+            assertEquals(1, received.size, "initial render")
 
-        token.close()
-        advanceUntilIdle()
-        assertEquals(0, mgr.getRegisteredPlacementCountForTests())
-    }
+            token.close()
+            advanceUntilIdle()
+            assertEquals(0, mgr.getRegisteredPlacementCountForTests())
+        }
 }

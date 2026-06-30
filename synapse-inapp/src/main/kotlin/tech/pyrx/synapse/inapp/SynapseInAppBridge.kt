@@ -40,8 +40,7 @@ public class SynapseInAppBridge internal constructor(
         callback: InAppRenderCallback,
     ): ShowToken = manager.show(placement = placement, callback = callback)
 
-    override suspend fun getActive(placement: String?): List<InAppMessage> =
-        manager.getActive(placement = placement)
+    override suspend fun getActive(placement: String?): List<InAppMessage> = manager.getActive(placement = placement)
 
     override suspend fun dismiss(
         messageId: String,

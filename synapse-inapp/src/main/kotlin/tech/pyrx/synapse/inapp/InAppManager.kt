@@ -150,6 +150,18 @@ import java.util.concurrent.atomic.AtomicLong
  *   of the never-ending `while (true) { delay(); poll() }` loop —
  *   tests turn the timer off and drive polls explicitly instead.
  */
+@Suppress(
+    // DI-heavy constructor by design. Each param is a separately-
+    // mockable seam used by tests + the install bridge; bundling them
+    // into a config struct would obscure the seams without removing
+    // the params.
+    "LongParameterList",
+    // The manager surfaces 5 public methods (per ADR-0009 D5) plus
+    // internal helpers for cache mutation, polling lifecycle, log
+    // dispatch, and timer arithmetic. Extracting them would just hide
+    // them behind a delegate; the class boundary is the right one.
+    "TooManyFunctions",
+)
 public class InAppManager(
     private val config: PyrxConfig,
     private val session: HTTPSession,
@@ -487,6 +499,12 @@ public class InAppManager(
         }
     }
 
+    // detekt:ReturnCount — 5 guard-style early returns (no contact, no
+    // placements, non-2xx, IOException, malformed JSON). Refactoring to
+    // single-exit would obscure the failure modes; the early-return
+    // pattern is idiomatic Kotlin and matches the existing push poll
+    // path in synapse-push.
+    @Suppress("ReturnCount")
     private suspend fun executePoll() {
         val contactId = contactIdProvider() ?: return
         val placements = cacheMutex.withLock { renderCallbacks.keys.toList() }
@@ -663,8 +681,11 @@ public class InAppManager(
         // Rule 8 — soft_degraded doubles the interval; clean response
         // resets to default.
         val wanted =
-            if (body.softDegraded) defaultPollIntervalMillis * degradedPollMultiplier
-            else defaultPollIntervalMillis
+            if (body.softDegraded) {
+                defaultPollIntervalMillis * degradedPollMultiplier
+            } else {
+                defaultPollIntervalMillis
+            }
         if (currentPollIntervalMillis != wanted) {
             currentPollIntervalMillis = wanted
             restartPollTimerIfRunning()
@@ -765,11 +786,12 @@ public class InAppManager(
             .build()
 
     private fun buildLogRequest(event: QueuedLogEvent): Request {
-        val body = LogRequestBody(
-            assignmentId = event.assignmentId,
-            event = event.event.wire,
-            ctaId = event.ctaId,
-        )
+        val body =
+            LogRequestBody(
+                assignmentId = event.assignmentId,
+                event = event.event.wire,
+                ctaId = event.ctaId,
+            )
         val bytes = json.encodeToString(LogRequestBody.serializer(), body).toByteArray(Charsets.UTF_8)
         val requestBody = bytes.toRequestBody(JSON_MEDIA_TYPE)
         val url = "${config.baseUrl.trimEnd('/')}$LOG_PATH"
@@ -790,16 +812,13 @@ public class InAppManager(
     internal fun getPollIntervalForTests(): Long = currentPollIntervalMillis
 
     /** Test-only — snapshot of queued log events (offline-queue depth). */
-    internal suspend fun getQueuedLogsForTests(): List<QueuedLogEvent> =
-        cacheMutex.withLock { logQueue.toList() }
+    internal suspend fun getQueuedLogsForTests(): List<QueuedLogEvent> = cacheMutex.withLock { logQueue.toList() }
 
     /** Test-only — number of cached active messages. */
-    internal suspend fun getActiveCountForTests(): Int =
-        cacheMutex.withLock { activeMessages.size }
+    internal suspend fun getActiveCountForTests(): Int = cacheMutex.withLock { activeMessages.size }
 
     /** Test-only — number of registered placement callbacks. */
-    internal suspend fun getRegisteredPlacementCountForTests(): Int =
-        cacheMutex.withLock { renderCallbacks.size }
+    internal suspend fun getRegisteredPlacementCountForTests(): Int = cacheMutex.withLock { renderCallbacks.size }
 
     public companion object {
         /** Default polling cadence (60s) — rule 3's window basis. */
