@@ -28,7 +28,7 @@ plugins {
 // version in lockstep with the per-module versions until a buildSrc release
 // script automates the sync.
 group = "tech.pyrx.synapse"
-version = "0.1.4"
+version = "0.2.0"
 
 // Aggregate every SDK module publication into one Central Portal upload.
 // Applied at the root project; nmcp's aggregation API walks subprojects
